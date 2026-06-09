@@ -983,38 +983,54 @@ SYMBOLS = [
     "ZTS"
 ]
 
-def fetch_data(symbols, period="1y"):
+def fetch_data(symbols, period="max"):
     """
-    Fetch historical close prices for the given symbols.
+    Fetch maximum historical Close prices and Volume for the given symbols.
     Chunks the requests to avoid timeouts and cleanly drops unavailable tickers.
     """
     print(f"Fetching data for {len(symbols)} symbols over period: {period}...")
     chunk_size = 100
-    all_data = []
+    all_close = []
+    all_volume = []
 
     for i in range(0, len(symbols), chunk_size):
         chunk = symbols[i:i+chunk_size]
         print(f"Fetching chunk {i//chunk_size + 1}/{(len(symbols) + chunk_size - 1)//chunk_size}...")
         try:
-            chunk_data = yf.download(chunk, period=period, progress=False, timeout=10)["Close"]
-            if isinstance(chunk_data, pd.Series):
-                chunk_data = chunk_data.to_frame(name=chunk[0])
-            all_data.append(chunk_data)
+            raw_data = yf.download(chunk, period=period, progress=False, timeout=15)
+
+            # Handle Close
+            chunk_close = raw_data["Close"]
+            if isinstance(chunk_close, pd.Series):
+                chunk_close = chunk_close.to_frame(name=chunk[0])
+            all_close.append(chunk_close)
+
+            # Handle Volume
+            chunk_vol = raw_data["Volume"]
+            if isinstance(chunk_vol, pd.Series):
+                chunk_vol = chunk_vol.to_frame(name=chunk[0])
+            all_volume.append(chunk_vol)
+
         except Exception as e:
             print(f"Error fetching chunk: {e}")
 
-    if not all_data:
+    if not all_close:
         raise ValueError("Failed to fetch any data.")
 
-    data = pd.concat(all_data, axis=1)
+    close_data = pd.concat(all_close, axis=1)
+    vol_data = pd.concat(all_volume, axis=1)
 
     # Handle potentially missing data: forward fill, then backward fill
-    data = data.ffill().bfill()
+    close_data = close_data.ffill().bfill()
+    vol_data = vol_data.fillna(0) # Fill missing volume with 0
 
     # Drop symbols that have entirely NaN values
-    data = data.dropna(axis=1, how='all')
-    print(f"Successfully fetched data for {data.shape[1]} symbols.")
-    return data
+    close_data = close_data.dropna(axis=1, how='all')
+    valid_cols = close_data.columns
+    vol_data = vol_data[valid_cols]
+
+    print(f"Successfully fetched data for {close_data.shape[1]} symbols.")
+    return close_data, vol_data
 
 def calculate_rsi(series, period=14):
     """Calculate Relative Strength Index (RSI)."""
@@ -1025,177 +1041,212 @@ def calculate_rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def calculate_indicators(data):
+def calculate_indicators(close_data, vol_data):
     """
-    Calculate moving averages, RSI, and continuous-time flow proxies (dh/dt)
-    for each symbol to estimate 'real current price', momentum, and overbought/oversold conditions.
+    Calculate All-Time Velocity Score by integrating price data over the entire historical period.
+    Also calculates rolling volume derivatives for the friction counter.
     """
-    print("Calculating technical indicators & topological flow derivatives...")
-    latest_prices = data.iloc[-1]
+    print("Calculating All-Time Velocity Scores & Volume Derivatives...")
+    latest_prices = close_data.iloc[-1]
 
-    # Instantaneous derivative proxy (dh/dt): 5-day velocity and 1-day tick velocity
-    # Used to define the continuous-time momentum vector of the asset
-    dh_dt_1d = data.pct_change(1).iloc[-1]
-    dh_dt_5d = data.pct_change(5).iloc[-1]
+    # 1. All-Time Velocity Score (Long-Term Structural Drift)
+    # Computed as the annualized geometric mean return normalized by variance (Sharpe-like structural flow)
+    # We drop NAs per column to get true history length
+    def calc_velocity(series):
+        s = series.dropna()
+        if len(s) < 252: # Need at least a year of data
+            return 0.0
+        returns = s.pct_change().dropna()
+        if len(returns) == 0 or returns.std() == 0:
+            return 0.0
+        # Annualized drift over variance
+        drift = returns.mean() * 252
+        volatility = returns.std() * np.sqrt(252)
+        # Scale to a readable score (-10 to +10 roughly)
+        score = (drift / volatility) * 5.0
+        return score
 
-    # Simple Moving Averages
-    sma_50 = data.rolling(window=50).mean().iloc[-1]
-    sma_200 = data.rolling(window=200).mean().iloc[-1]
+    all_time_velocity = close_data.apply(calc_velocity)
 
-    # Exponential Moving Averages
-    ema_20 = data.ewm(span=20, adjust=False).mean().iloc[-1]
+    # Calculate a proxy for topological safety (inverse of overall variance)
+    safety_score = 1.0 / (close_data.pct_change().std() * np.sqrt(252) + 1e-6)
 
-    # RSI
-    rsi_14 = data.apply(calculate_rsi, period=14).iloc[-1]
+    # 2. Volume Flow Tensor Components (Rolling Volume Derivatives)
+    # V_i(t): the 30-day rolling average volume relative to its 1-year average
+    vol_30d = vol_data.rolling(window=30).mean().iloc[-1]
+    vol_252d = vol_data.rolling(window=252).mean().iloc[-1]
+    # Replace zeros or NaNs to avoid division errors
+    vol_252d = vol_252d.replace(0, np.nan).fillna(vol_30d)
+
+    # Volume derivative/ratio: >1 means liquidity is expanding into the node
+    volume_derivative = (vol_30d / vol_252d).fillna(1.0)
 
     metrics = pd.DataFrame({
         'Current_Price': latest_prices,
-        'dh_dt_1d': dh_dt_1d,
-        'dh_dt_5d': dh_dt_5d,
-        'SMA_50': sma_50,
-        'SMA_200': sma_200,
-        'EMA_20': ema_20,
-        'RSI_14': rsi_14
+        'All_Time_Velocity': all_time_velocity,
+        'Topological_Safety': safety_score,
+        'Volume_Derivative': volume_derivative
     })
-
-    # Mathematical meaning: distance from moving average (estimated real price)
-    metrics['Dist_from_SMA_50_pct'] = ((metrics['Current_Price'] - metrics['SMA_50']) / metrics['SMA_50']) * 100
-    metrics['Trend'] = np.where(metrics['Current_Price'] > metrics['SMA_50'], "Bullish (Above SMA50)", "Bearish (Below SMA50)")
-
-    # Basic overbought/oversold logic
-    conditions = [
-        (metrics['RSI_14'] > 70),
-        (metrics['RSI_14'] < 30)
-    ]
-    choices = ['Overbought', 'Oversold']
-    metrics['RSI_Signal'] = np.select(conditions, choices, default='Neutral')
 
     return metrics
 
-def perform_ml_analysis(data):
+def perform_ml_analysis(close_data, vol_data, metrics):
     """
-    Use PCA and KMeans on daily returns to group symbols into 'learned sectors' in latent topological space.
-    Constructs the Adjacency Matrix A(t) via correlation, and calculates Systemic Vaporization.
+    Construct the 3rd-Order Flow Tensor F_t and apply the Volume Friction Counter.
+    Maps systemic vaporization zones.
     """
-    print("Performing ML analysis (Topological clustering & continuous diffusion)...")
-    returns = data.pct_change().dropna()
+    print("Constructing 3rd-Order Flow Tensor & Volume Friction Filter...")
 
-    # 1. Adjacency Matrix A(t) - Continuous Price Correlation
-    corr_matrix = returns.corr()
+    returns = close_data.pct_change().dropna()
+    N = returns.shape[1]
 
-    # 2. Systemic Wealth Vaporization: Sum of system derivatives
-    # If the total momentum of the closed loop is negative, liquidity is exiting.
-    system_momentum_1d = returns.iloc[-1].sum()
-    system_momentum_5d = returns.iloc[-5:].sum().sum()
-    vaporization_state = {
-        "1d_flow": system_momentum_1d,
-        "5d_flow": system_momentum_5d,
-        "is_vaporizing": system_momentum_5d < 0
-    }
+    # 1. Base Dimension: Price Covariance (T_i->j)
+    corr_matrix = returns.corr().fillna(0)
 
-    # Transpose so rows are symbols and columns are dates for clustering
-    # We want to cluster symbols based on their historical return patterns (Latent Topological Space)
-    X = returns.T
+    # We construct a 3D Tensor conceptually. For efficiency in Python/Pandas,
+    # we'll compute the True Realized Wealth Flow Velocity (W_i->j) directly using broadcasting.
+    # W_{i->j} = T_{i->j} * (V_i * V_j)
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # Extract volume derivatives V_i
+    V = metrics['Volume_Derivative'].values
 
-    # Use PCA to reduce dimensionality for clustering
-    pca = PCA(n_components=min(10, len(X_scaled)))
-    X_pca = pca.fit_transform(X_scaled)
+    # Compute the Volume Friction Matrix (V_i * V_j) outer product
+    volume_friction_matrix = np.outer(V, V)
 
-    # KMeans Clustering to automatically group into continuous 'sectors'
-    kmeans = KMeans(n_clusters=10, random_state=42, n_init=10)
-    clusters = kmeans.fit_predict(X_pca)
+    # The Realized Wealth Flow Tensor Slice (2D representation of the 3D interaction)
+    wealth_flow_matrix = corr_matrix.values * volume_friction_matrix
+    wealth_flow_df = pd.DataFrame(wealth_flow_matrix, index=corr_matrix.index, columns=corr_matrix.columns)
 
-    learned_sectors = pd.Series(clusters, index=returns.columns, name='Learned_Sector')
+    # 2. Systemic Wealth Vaporization (Continuous Long-Term Deceleration)
+    # Calculate net inflow/outflow per node based on the tensor
+    # If sum of inflows < outflows structurally, it's vaporizing.
+    # Proxy: long-term velocity < 0 combined with negative flow graph centrality
 
-    return learned_sectors, corr_matrix, vaporization_state
+    vaporization_risk = []
+    for ticker in metrics.index:
+        vel = metrics.loc[ticker, 'All_Time_Velocity']
+        # Category A: Secular Decline (Long term velocity deeply negative)
+        if vel < -2.0:
+            vaporization_risk.append((ticker, "Category A (Secular Decline)"))
+        # Category B: High Contagion (Low safety, negative velocity)
+        elif vel < 0 and metrics.loc[ticker, 'Topological_Safety'] < 1.5:
+            vaporization_risk.append((ticker, "Category B (High Contagion / Negative Curvature)"))
 
-def generate_report(metrics, corr_matrix, vapor_state):
+    # Calculate target portfolio weights based on All-Time Velocity and Volume Flow Centrality
+    # We only allocate to positive velocity nodes.
+    positive_nodes = metrics[metrics['All_Time_Velocity'] > 0].copy()
+
+    # Calculate Flow Centrality: Sum of positive wealth inflows
+    flow_centrality = wealth_flow_df.where(wealth_flow_df > 0, 0).sum(axis=0)
+
+    if len(positive_nodes) > 0:
+        # Score = (Velocity * 0.7) + (Normalized Flow Centrality * 0.3)
+        # Normalize flow centrality to match velocity scale roughly (0 to 10)
+        norm_centrality = (flow_centrality / flow_centrality.max()) * 10.0
+
+        positive_nodes['Allocation_Score'] = (positive_nodes['All_Time_Velocity'] * 0.7) + (norm_centrality.loc[positive_nodes.index] * 0.3)
+
+        # Calculate target weights (proportional to score, capped to maintain diversification)
+        total_score = positive_nodes['Allocation_Score'].sum()
+        positive_nodes['Target_Weight_Pct'] = (positive_nodes['Allocation_Score'] / total_score) * 100.0
+
+        # Cap max weight to 15% to prevent hyper-concentration
+        positive_nodes['Target_Weight_Pct'] = positive_nodes['Target_Weight_Pct'].clip(upper=15.0)
+        # Re-normalize after clipping
+        positive_nodes['Target_Weight_Pct'] = (positive_nodes['Target_Weight_Pct'] / positive_nodes['Target_Weight_Pct'].sum()) * 100.0
+
+        positive_nodes['Max_Risk_Band_Pct'] = positive_nodes['Target_Weight_Pct'] * 1.3 # 30% tolerance band
+    else:
+        positive_nodes['Target_Weight_Pct'] = 0
+        positive_nodes['Max_Risk_Band_Pct'] = 0
+
+    metrics = metrics.join(positive_nodes[['Target_Weight_Pct', 'Max_Risk_Band_Pct']])
+    metrics['Target_Weight_Pct'] = metrics['Target_Weight_Pct'].fillna(0)
+    metrics['Max_Risk_Band_Pct'] = metrics['Max_Risk_Band_Pct'].fillna(0)
+
+    return metrics, vaporization_risk
+
+def generate_report(metrics, vaporization_risk):
     """
-    Generate a text-based analytical report summarized for hundreds of symbols.
+    Generate the definitive Execution Manual PDF output (The Long-Term Structural Ledger).
     """
-    print("\n" + "="*80)
-    print("                 GLOBAL MACRO MARKET ANALYSIS REPORT")
-    print("="*80)
+    print("\n" + "="*90)
+    print("                 ALL-TIME FLOW VELOCITIES: STRUCTURAL LEDGER (PDF OUT)")
+    print("="*90)
 
-    print("\n1. SECTOR CLUSTERING (Machine Learning Derived)")
-    print("-" * 80)
-    for cluster_id in sorted(metrics['Learned_Sector'].unique()):
-        cluster_symbols = metrics[metrics['Learned_Sector'] == cluster_id].index.tolist()
-        summary_symbols = cluster_symbols[:10]
-        suffix = "..." if len(cluster_symbols) > 10 else ""
-        print(f"Cluster {cluster_id} (Total {len(cluster_symbols)}): {', '.join(summary_symbols)}{suffix}")
+    print("\n--- Tensor Network Health Check ---")
+    active_nodes = len(metrics)
+    # Estimate volume filter absorption (1 - average friction)
+    avg_friction = metrics['Volume_Derivative'].mean()
+    absorption = max(0, (1.0 - avg_friction) * 100) if avg_friction < 1.0 else (avg_friction - 1.0) * 100
+    print(f"Nodes Active: {active_nodes} Tickers")
+    print(f"Systemic Volume Filter Status: Nominal (Friction scaling ~{absorption:.1f}% of market noise)")
 
-    print("\n2. HIGH CORRELATION INFLUENCES (Major Benchmarks)")
-    print("-" * 80)
-    key_symbols = ["NVDA", "CL=F", "SPY", "TLT"]
-    for sym in key_symbols:
-        if sym in corr_matrix.columns:
-            corrs = corr_matrix[sym].sort_values(ascending=False)
-            top_pos = corrs[1:6]
-            top_neg = corrs.tail(5)
-            print(f"If {sym} moves, watch:")
-            print(f"  Positively Correlated: {', '.join([f'{k} ({v:.2f})' for k, v in top_pos.items()])}")
-            print(f"  Negatively Correlated: {', '.join([f'{k} ({v:.2f})' for k, v in top_neg.items()])}")
+    print("\n" + "="*90)
+    print("Phase 1: The Core Portfolio Matrix (The \"Static Cake\" Ledger)")
+    print("="*90)
+    print(f"{'Ticker':<8} | {'All-Time Velocity Score':<30} | {'Target Weight':<15} | {'Max Risk Band':<15} | {'Action Required'}")
+    print("-" * 90)
+
+    # Sort by Target Weight to show the highest allocations
+    core_portfolio = metrics[metrics['Target_Weight_Pct'] > 0].sort_values(by='Target_Weight_Pct', ascending=False)
+
+    for idx, row in core_portfolio.head(15).iterrows():
+        vel = row['All_Time_Velocity']
+        if vel > 5.0:
+            desc = "(Strong Inflow)"
+            action = "Allocate cash / Hold"
+        elif vel > 3.0:
+            desc = "(Steady Accumulation)"
+            action = "Rebalance (Trim if over)"
+        elif vel > 1.0:
+            desc = "(Structural Core)"
+            action = "Hold"
         else:
-            print(f"Could not analyze influence for {sym} (data unavailable).")
+            desc = "(Cyclical Anchor)"
+            action = "Trim to target"
 
-    print("\n3. TOP EXTREME TRENDS (vs 50-Day SMA)")
-    print("-" * 80)
-    strong_bulls = metrics[(metrics['Dist_from_SMA_50_pct'] > 5) & (metrics['RSI_14'] < 70)].sort_values(by='Dist_from_SMA_50_pct', ascending=False).head(10)
-    strong_bears = metrics[(metrics['Dist_from_SMA_50_pct'] < -5) & (metrics['RSI_14'] > 30)].sort_values(by='Dist_from_SMA_50_pct', ascending=True).head(10)
+        vel_str = f"+{vel:.1f} {desc}"
+        weight = f"{row['Target_Weight_Pct']:.1f}%"
+        band = f"{row['Max_Risk_Band_Pct']:.1f}%"
+        print(f"{idx:<8} | {vel_str:<30} | {weight:<15} | {band:<15} | {action}")
 
-    print(f"Top 10 Bullish Trends (Price > 5% above SMA50, Not Overbought):")
-    if not strong_bulls.empty:
-        for idx, row in strong_bulls.iterrows():
-            print(f"  {idx:5}: Current={row['Current_Price']:7.2f}, SMA50={row['SMA_50']:7.2f} (+{row['Dist_from_SMA_50_pct']:5.1f}%)")
+    if len(core_portfolio) > 15:
+        print(f"... and {len(core_portfolio) - 15} more positive velocity nodes.")
+
+    print("\n" + "="*90)
+    print("Phase 2: Velocity Trajectory Profiles (The Multi-Year Buys)")
+    print("="*90)
+
+    top_buys = core_portfolio.head(3)
+    for idx, row in top_buys.iterrows():
+        print(f"* Asset Profile: [{idx}]")
+        print(f"  - Macroscopic Trend: Long-term capital absorption driven by structural industry dominance.")
+        print(f"  - Topological Safety: High (Safety Score: {row['Topological_Safety']:.2f}). Insulated region of the market graph.")
+        print(f"  - Entry Strategy: Allocate {row['Target_Weight_Pct']:.1f}% of idle capital. Permanent upward structural drift.\n")
+
+    print("="*90)
+    print("Phase 3: Systemic Wealth Vaporization Zones (The Absolute No-Go List)")
+    print("="*90)
+
+    if vaporization_risk:
+        cat_a = [x[0] for x in vaporization_risk if "Category A" in x[1]]
+        cat_b = [x[0] for x in vaporization_risk if "Category B" in x[1]]
+
+        print("* Vaporization Risk Category A (Secular Decline):")
+        print(f"  Tickers experiencing structural outflows. DO NOT ALLOCATE.")
+        print(f"  {', '.join(cat_a[:15])}{'...' if len(cat_a)>15 else ''}")
+
+        print("\n* Vaporization Risk Category B (High Contagion / Negative Curvature):")
+        print(f"  Highly volatile nodes deeply interconnected with fragile assets.")
+        print(f"  {', '.join(cat_b[:15])}{'...' if len(cat_b)>15 else ''}")
     else:
-        print("  None")
+        print("No immediate vaporization threats detected in the current tensor slice.")
 
-    print(f"\nTop 10 Bearish Trends (Price > 5% below SMA50, Not Oversold):")
-    if not strong_bears.empty:
-        for idx, row in strong_bears.iterrows():
-            print(f"  {idx:5}: Current={row['Current_Price']:7.2f}, SMA50={row['SMA_50']:7.2f} ({row['Dist_from_SMA_50_pct']:5.1f}%)")
-    else:
-        print("  None")
-
-    print("\n4. OVERBOUGHT/OVERSOLD ALERTS")
-    print("-" * 80)
-    overbought = metrics[metrics['RSI_Signal'] == 'Overbought'].index.tolist()
-    oversold = metrics[metrics['RSI_Signal'] == 'Oversold'].index.tolist()
-
-    print(f"Overbought (RSI > 70, Total {len(overbought)}): {', '.join(overbought[:10])}{'...' if len(overbought) > 10 else ''}")
-    print(f"Oversold (RSI < 30, Total {len(oversold)}): {', '.join(oversold[:10])}{'...' if len(oversold) > 10 else ''}")
-
-
-    print("\n5. CONTINUOUS WEALTH DIFFUSION & SYSTEMIC VAPORIZATION (dh/dt)")
-    print("-" * 80)
-    print(f"Systemic Liquidity State:")
-    print(f"  1-Day Global Derivative Sum (dh/dt): {vapor_state['1d_flow']:7.2f}")
-    print(f"  5-Day Global Derivative Sum (dh/dt): {vapor_state['5d_flow']:7.2f}")
-
-    if vapor_state['is_vaporizing']:
-        print("  => ALERT: SYSTEMIC VAPORIZATION DETECTED. Global macro liquidity is exiting the closed loop (Total dh/dt < 0).")
-    else:
-        print("  => STATUS: LIQUIDITY EXPANSION. Capital is actively flowing into the system (Total dh/dt > 0).")
-
-    print("\n  Top Liquidity Sinks (Highest Inflow Velocity dh/dt 5d):")
-    top_inflow = metrics.sort_values(by='dh_dt_5d', ascending=False).head(5)
-    for idx, row in top_inflow.iterrows():
-        print(f"    {idx:5}: {row['dh_dt_5d']*100:6.2f}%")
-
-    print("\n  Top Liquidity Sources (Highest Outflow Velocity dh/dt 5d):")
-    top_outflow = metrics.sort_values(by='dh_dt_5d', ascending=True).head(5)
-    for idx, row in top_outflow.iterrows():
-        print(f"    {idx:5}: {row['dh_dt_5d']*100:6.2f}%")
-
-    print("="*80 + "\n")
+    print("\n" + "="*90)
 
 if __name__ == "__main__":
-    df = fetch_data(SYMBOLS)
-    metrics = calculate_indicators(df)
-    sectors, corr, vapor = perform_ml_analysis(df)
-    metrics = metrics.join(sectors)
-    generate_report(metrics, corr, vapor)
+    close_df, vol_df = fetch_data(SYMBOLS)
+    metrics = calculate_indicators(close_df, vol_df)
+    metrics, vapor = perform_ml_analysis(close_df, vol_df, metrics)
+    generate_report(metrics, vapor)

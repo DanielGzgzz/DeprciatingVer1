@@ -1027,11 +1027,16 @@ def calculate_rsi(series, period=14):
 
 def calculate_indicators(data):
     """
-    Calculate moving averages and RSI for each symbol to estimate 'real current price'
-    and overbought/oversold conditions. Returns a DataFrame of current metrics.
+    Calculate moving averages, RSI, and continuous-time flow proxies (dh/dt)
+    for each symbol to estimate 'real current price', momentum, and overbought/oversold conditions.
     """
-    print("Calculating technical indicators...")
+    print("Calculating technical indicators & topological flow derivatives...")
     latest_prices = data.iloc[-1]
+
+    # Instantaneous derivative proxy (dh/dt): 5-day velocity and 1-day tick velocity
+    # Used to define the continuous-time momentum vector of the asset
+    dh_dt_1d = data.pct_change(1).iloc[-1]
+    dh_dt_5d = data.pct_change(5).iloc[-1]
 
     # Simple Moving Averages
     sma_50 = data.rolling(window=50).mean().iloc[-1]
@@ -1045,6 +1050,8 @@ def calculate_indicators(data):
 
     metrics = pd.DataFrame({
         'Current_Price': latest_prices,
+        'dh_dt_1d': dh_dt_1d,
+        'dh_dt_5d': dh_dt_5d,
         'SMA_50': sma_50,
         'SMA_200': sma_200,
         'EMA_20': ema_20,
@@ -1067,36 +1074,45 @@ def calculate_indicators(data):
 
 def perform_ml_analysis(data):
     """
-    Use PCA and KMeans on daily returns to group symbols into 'learned sectors'.
-    Also calculates correlation matrix.
+    Use PCA and KMeans on daily returns to group symbols into 'learned sectors' in latent topological space.
+    Constructs the Adjacency Matrix A(t) via correlation, and calculates Systemic Vaporization.
     """
-    print("Performing ML analysis (clustering and correlation)...")
+    print("Performing ML analysis (Topological clustering & continuous diffusion)...")
     returns = data.pct_change().dropna()
 
-    # Calculate Correlation Matrix
+    # 1. Adjacency Matrix A(t) - Continuous Price Correlation
     corr_matrix = returns.corr()
 
+    # 2. Systemic Wealth Vaporization: Sum of system derivatives
+    # If the total momentum of the closed loop is negative, liquidity is exiting.
+    system_momentum_1d = returns.iloc[-1].sum()
+    system_momentum_5d = returns.iloc[-5:].sum().sum()
+    vaporization_state = {
+        "1d_flow": system_momentum_1d,
+        "5d_flow": system_momentum_5d,
+        "is_vaporizing": system_momentum_5d < 0
+    }
+
     # Transpose so rows are symbols and columns are dates for clustering
-    # We want to cluster symbols based on their historical return patterns
+    # We want to cluster symbols based on their historical return patterns (Latent Topological Space)
     X = returns.T
 
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # Use PCA to reduce dimensionality for clustering (e.g. 5 principal components)
-    pca = PCA(n_components=min(5, len(X_scaled)))
+    # Use PCA to reduce dimensionality for clustering
+    pca = PCA(n_components=min(10, len(X_scaled)))
     X_pca = pca.fit_transform(X_scaled)
 
-    # KMeans Clustering to automatically group into 'sectors'
-    # We'll use 5 clusters as a generic starting point
+    # KMeans Clustering to automatically group into continuous 'sectors'
     kmeans = KMeans(n_clusters=10, random_state=42, n_init=10)
     clusters = kmeans.fit_predict(X_pca)
 
     learned_sectors = pd.Series(clusters, index=returns.columns, name='Learned_Sector')
 
-    return learned_sectors, corr_matrix
+    return learned_sectors, corr_matrix, vaporization_state
 
-def generate_report(metrics, corr_matrix):
+def generate_report(metrics, corr_matrix, vapor_state):
     """
     Generate a text-based analytical report summarized for hundreds of symbols.
     """
@@ -1153,11 +1169,33 @@ def generate_report(metrics, corr_matrix):
     print(f"Overbought (RSI > 70, Total {len(overbought)}): {', '.join(overbought[:10])}{'...' if len(overbought) > 10 else ''}")
     print(f"Oversold (RSI < 30, Total {len(oversold)}): {', '.join(oversold[:10])}{'...' if len(oversold) > 10 else ''}")
 
+
+    print("\n5. CONTINUOUS WEALTH DIFFUSION & SYSTEMIC VAPORIZATION (dh/dt)")
+    print("-" * 80)
+    print(f"Systemic Liquidity State:")
+    print(f"  1-Day Global Derivative Sum (dh/dt): {vapor_state['1d_flow']:7.2f}")
+    print(f"  5-Day Global Derivative Sum (dh/dt): {vapor_state['5d_flow']:7.2f}")
+
+    if vapor_state['is_vaporizing']:
+        print("  => ALERT: SYSTEMIC VAPORIZATION DETECTED. Global macro liquidity is exiting the closed loop (Total dh/dt < 0).")
+    else:
+        print("  => STATUS: LIQUIDITY EXPANSION. Capital is actively flowing into the system (Total dh/dt > 0).")
+
+    print("\n  Top Liquidity Sinks (Highest Inflow Velocity dh/dt 5d):")
+    top_inflow = metrics.sort_values(by='dh_dt_5d', ascending=False).head(5)
+    for idx, row in top_inflow.iterrows():
+        print(f"    {idx:5}: {row['dh_dt_5d']*100:6.2f}%")
+
+    print("\n  Top Liquidity Sources (Highest Outflow Velocity dh/dt 5d):")
+    top_outflow = metrics.sort_values(by='dh_dt_5d', ascending=True).head(5)
+    for idx, row in top_outflow.iterrows():
+        print(f"    {idx:5}: {row['dh_dt_5d']*100:6.2f}%")
+
     print("="*80 + "\n")
 
 if __name__ == "__main__":
     df = fetch_data(SYMBOLS)
     metrics = calculate_indicators(df)
-    sectors, corr = perform_ml_analysis(df)
+    sectors, corr, vapor = perform_ml_analysis(df)
     metrics = metrics.join(sectors)
-    generate_report(metrics, corr)
+    generate_report(metrics, corr, vapor)

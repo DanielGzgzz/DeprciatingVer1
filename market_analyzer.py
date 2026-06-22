@@ -1,12 +1,11 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
+import scipy.fftpack
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-import scipy.fftpack
+from scipy.signal import hilbert
+from numpy.linalg import eig
 
 
 # A wide array of symbols to satisfy the request
@@ -114,19 +113,43 @@ def calculate_indicators(close_data, vol_data):
     # Volume derivative/ratio: >1 means liquidity is expanding into the node
     volume_derivative = (vol_30d / vol_252d).fillna(1.0)
 
+
+    # Advanced Metric 1: Kuramoto Phase Synchronization (Global Crash Predictor)
+    print("Computing Kuramoto Phase Synchronization Dynamics...")
+    # Extract phase using Hilbert transform on normalized returns
+    returns = close_data.pct_change().dropna()
+    if len(returns) > 30:
+        detrended = returns - returns.mean()
+        analytic_signal = hilbert(detrended, axis=0)
+        instantaneous_phase = np.unwrap(np.angle(analytic_signal), axis=0)
+
+        # Calculate Kuramoto order parameter r(t) for the last 30 days
+        # r * e^(i * psi) = 1/N * sum(e^(i * theta_j))
+        N_assets = instantaneous_phase.shape[1]
+        complex_phases = np.exp(1j * instantaneous_phase[-30:])
+        r_t = np.abs(np.sum(complex_phases, axis=1) / N_assets)
+        # Average synchronization over the last month
+        global_kuramoto_sync = np.mean(r_t)
+    else:
+        global_kuramoto_sync = 0.0
+
     metrics = pd.DataFrame({
         'Current_Price': latest_prices,
         'All_Time_Velocity': all_time_velocity,
         'Topological_Safety': safety_score,
-        'Volume_Derivative': volume_derivative
+        'Volume_Derivative': volume_derivative,
+        'Variance': close_data.pct_change().var() * 252
     })
+
+    # Attach global parameter to the first row just to pass it along cleanly
+    metrics.loc[metrics.index[0], 'Global_Kuramoto_Sync'] = global_kuramoto_sync
 
     return metrics
 
 def perform_ml_analysis(close_data, vol_data, metrics):
     """
     Construct the 3rd-Order Flow Tensor F_t and apply the Volume Friction Counter.
-    Maps systemic vaporization zones.
+    Maps systemic vaporization zones using Eigenvector Centrality and Kelly Sizing.
     """
     print("Constructing 3rd-Order Flow Tensor & Volume Friction Filter...")
 
@@ -136,66 +159,80 @@ def perform_ml_analysis(close_data, vol_data, metrics):
     # 1. Base Dimension: Price Covariance (T_i->j)
     corr_matrix = returns.corr().fillna(0)
 
-    # We construct a 3D Tensor conceptually. For efficiency in Python/Pandas,
-    # we'll compute the True Realized Wealth Flow Velocity (W_i->j) directly using broadcasting.
-    # W_{i->j} = T_{i->j} * (V_i * V_j)
-
-    # Extract volume derivatives V_i
     V = metrics['Volume_Derivative'].values
-
-    # Compute the Volume Friction Matrix (V_i * V_j) outer product
     volume_friction_matrix = np.outer(V, V)
 
-    # The Realized Wealth Flow Tensor Slice (2D representation of the 3D interaction)
+    # Realized Wealth Flow Tensor Slice
     wealth_flow_matrix = corr_matrix.values * volume_friction_matrix
+    np.fill_diagonal(wealth_flow_matrix, 0)
     wealth_flow_df = pd.DataFrame(wealth_flow_matrix, index=corr_matrix.index, columns=corr_matrix.columns)
 
-    # 2. Systemic Wealth Vaporization (Continuous Long-Term Deceleration)
-    # Calculate net inflow/outflow per node based on the tensor
-    # If sum of inflows < outflows structurally, it's vaporizing.
-    # Proxy: long-term velocity < 0 combined with negative flow graph centrality
+    # Advanced Metric 2: Eigenvector Flow Centrality
+    print("Calculating Eigenvector Centrality (True Capital Sinks)...")
+    # Shift matrix to be strictly positive for Frobenius-Perron theorem
+    min_val = np.min(wealth_flow_matrix)
+    if min_val < 0:
+        shifted_matrix = wealth_flow_matrix - min_val
+    else:
+        shifted_matrix = wealth_flow_matrix
 
+    eigenvalues, eigenvectors = eig(shifted_matrix)
+    # The principal eigenvector corresponds to the largest eigenvalue
+    max_idx = np.argmax(np.abs(eigenvalues))
+    principal_eigenvector = np.abs(eigenvectors[:, max_idx])
+
+    # Normalize centrality
+    eigen_centrality = pd.Series(principal_eigenvector / np.max(principal_eigenvector), index=corr_matrix.index)
+
+    # Read Kuramoto Sync
+    global_sync = metrics['Global_Kuramoto_Sync'].iloc[0] if 'Global_Kuramoto_Sync' in metrics.columns else 0.0
     vaporization_risk = []
+
+    # Kuramoto Crash Override
+    CRASH_THRESHOLD = 0.85
+    is_crashing = global_sync > CRASH_THRESHOLD
+
     for ticker in metrics.index:
         vel = metrics.loc[ticker, 'All_Time_Velocity']
-        # Category A: Secular Decline (Long term velocity deeply negative)
-        if vel < -2.0:
+        if is_crashing:
+             vaporization_risk.append((ticker, f"Category A (SYSTEMIC KURAMOTO CRASH DETECTED: Sync={global_sync:.2f})"))
+        elif vel < -2.0:
             vaporization_risk.append((ticker, "Category A (Secular Decline)"))
-        # Category B: High Contagion (Low safety, negative velocity)
         elif vel < 0 and metrics.loc[ticker, 'Topological_Safety'] < 1.5:
             vaporization_risk.append((ticker, "Category B (High Contagion / Negative Curvature)"))
 
-    # Calculate target portfolio weights based on All-Time Velocity and Volume Flow Centrality
-    # We only allocate to positive velocity nodes.
+    # Calculate target portfolio weights based on Eigenvector Centrality and Continuous-Time Kelly
     positive_nodes = metrics[metrics['All_Time_Velocity'] > 0].copy()
 
-    # Calculate Flow Centrality: Sum of positive wealth inflows
-    flow_centrality = wealth_flow_df.where(wealth_flow_df > 0, 0).sum(axis=0)
+    if len(positive_nodes) > 0 and not is_crashing:
+        # Advanced Metric 3: Continuous-Time Fractional Kelly Sizing
+        # f* = (mu - r) / sigma^2
+        # We use All-Time Velocity as a proxy for the drift/variance ratio,
+        # and scale it by the eigenvector centrality to ensure it's a true sink.
 
-    if len(positive_nodes) > 0:
-        # Score = (Velocity * 0.7) + (Normalized Flow Centrality * 0.3)
-        # Normalize flow centrality to match velocity scale roughly (0 to 10)
-        norm_centrality = (flow_centrality / flow_centrality.max()) * 10.0
+        # Kelly Fraction Approximation (Bounded)
+        kelly_fractions = positive_nodes['All_Time_Velocity'] * eigen_centrality.loc[positive_nodes.index]
+        # Half-Kelly for safety
+        kelly_fractions = kelly_fractions * 0.5
 
-        positive_nodes['Allocation_Score'] = (positive_nodes['All_Time_Velocity'] * 0.7) + (norm_centrality.loc[positive_nodes.index] * 0.3)
-
-        # Calculate target weights (proportional to score, capped to maintain diversification)
-        total_score = positive_nodes['Allocation_Score'].sum()
-        positive_nodes['Target_Weight_Pct'] = (positive_nodes['Allocation_Score'] / total_score) * 100.0
-
-        # Cap max weight to 15% to prevent hyper-concentration
+        # Normalize weights
+        positive_nodes['Target_Weight_Pct'] = (kelly_fractions / kelly_fractions.sum()) * 100.0
         positive_nodes['Target_Weight_Pct'] = positive_nodes['Target_Weight_Pct'].clip(upper=15.0)
-        # Re-normalize after clipping
         positive_nodes['Target_Weight_Pct'] = (positive_nodes['Target_Weight_Pct'] / positive_nodes['Target_Weight_Pct'].sum()) * 100.0
 
-        positive_nodes['Max_Risk_Band_Pct'] = positive_nodes['Target_Weight_Pct'] * 1.3 # 30% tolerance band
+        positive_nodes['Max_Risk_Band_Pct'] = positive_nodes['Target_Weight_Pct'] * 1.3
     else:
+        # If crashing or no positive nodes, move 100% to Cash/Safe Havens (Risk weight 0)
         positive_nodes['Target_Weight_Pct'] = 0
         positive_nodes['Max_Risk_Band_Pct'] = 0
 
     metrics = metrics.join(positive_nodes[['Target_Weight_Pct', 'Max_Risk_Band_Pct']])
     metrics['Target_Weight_Pct'] = metrics['Target_Weight_Pct'].fillna(0)
     metrics['Max_Risk_Band_Pct'] = metrics['Max_Risk_Band_Pct'].fillna(0)
+    metrics['Eigenvector_Centrality'] = eigen_centrality
+
+    # Store global sync for reporting
+    metrics.loc[metrics.index[0], 'Global_Kuramoto_Sync'] = global_sync
 
     return metrics, vaporization_risk
 

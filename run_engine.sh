@@ -12,13 +12,13 @@ echo -e "${CYAN}======================================================${NC}"
 
 # 1. Update the Universe
 echo -e "\n[SYSTEM] Updating Global Tensor Matrix (Fetching S&P 500, S&P 400, ETFs, Forex)..."
-python expand_symbols.py
+python3 expand_symbols.py
 
 echo -e "\n${GREEN}[SYSTEM] Matrix updated successfully.${NC}"
 
 # Show the top 10 tickers by grabbing the output safely from python
 echo -e "\n--- Top 10 Core Matrix Nodes (Sample) ---"
-python -c "from market_analyzer import SYMBOLS; print(' '.join(SYMBOLS[:10]))"
+python3 -c "from market_analyzer import SYMBOLS; print(' '.join(SYMBOLS[:10]))"
 echo -e "\n-----------------------------------------"
 
 while true; do
@@ -33,17 +33,17 @@ while true; do
     case $option in
         1)
             echo -e "\n${GREEN}Executing Full Market Scan (This will process 900+ vectors)...${NC}"
-            python market_analyzer.py
+            python3 market_analyzer.py
             ;;
         2)
             echo -e "\n${GREEN}Initializing Interactive Portfolio Assessor...${NC}"
-            python portfolio_assessor.py --portfolio
+            python3 portfolio_assessor.py --portfolio
             ;;
         3)
             read -p "Enter Ticker Symbol (e.g. AMPX): " ticker
             if [ -n "$ticker" ]; then
                 echo -e "\n${GREEN}Scanning Node: $ticker...${NC}"
-                python portfolio_assessor.py --single "$ticker"
+                python3 portfolio_assessor.py --single "$ticker"
             else
                 echo -e "${RED}Invalid input.${NC}"
             fi

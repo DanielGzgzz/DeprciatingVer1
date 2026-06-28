@@ -1115,6 +1115,36 @@ def perform_ml_analysis(close_data, vol_data, metrics):
     # Normalize centrality
     eigen_centrality = pd.Series(principal_eigenvector / np.max(principal_eigenvector), index=corr_matrix.index)
 
+    # --- SECOND DEPTH: SPECTRAL GRAPH LAPLACIAN & FIEDLER VECTOR ---
+    print("Computing 2nd-Depth: Graph Laplacian & Fiedler Algebraic Connectivity...")
+    # Calculate degree matrix D (sum of weights for each node)
+    # We use the absolute value of the flow matrix to represent connection strength W
+    W = np.abs(wealth_flow_matrix)
+    np.fill_diagonal(W, 0)
+    degrees = np.sum(W, axis=1)
+    D = np.diag(degrees)
+
+    # Compute Laplacian L = D - W
+    L = D - W
+
+    # Calculate eigenvalues of the Laplacian
+    laplacian_eigenvals = np.real(eig(L)[0])
+    laplacian_eigenvals = np.sort(laplacian_eigenvals)
+
+    # The Fiedler eigenvalue (lambda_2) represents the algebraic connectivity of the network
+    # If the network is highly disconnected, lambda_2 is near 0.
+    # If the network is highly interconnected (fragile contagion state), lambda_2 is large.
+    if len(laplacian_eigenvals) > 1:
+        fiedler_val = laplacian_eigenvals[1]
+    else:
+        fiedler_val = 0.0
+
+    # We use the Fiedler value to dynamically dampen the Kelly fraction.
+    # High connectivity = systemic fragility = smaller Kelly bets.
+    # Low connectivity = orthogonal diversification = larger Kelly bets.
+    # Normalizing Fiedler value empirically (usually ranges from 0 to N). We scale it inversely.
+    fiedler_dampener = 1.0 / (1.0 + (fiedler_val / float(N)))
+
     # Read Kuramoto Sync
     global_sync = metrics['Global_Kuramoto_Sync'].iloc[0] if 'Global_Kuramoto_Sync' in metrics.columns else 0.0
     vaporization_risk = []
@@ -1136,15 +1166,19 @@ def perform_ml_analysis(close_data, vol_data, metrics):
     positive_nodes = metrics[metrics['All_Time_Velocity'] > 0].copy()
 
     if len(positive_nodes) > 0 and not is_crashing:
-        # Advanced Metric 3: Continuous-Time Fractional Kelly Sizing
+        # Advanced Metric 3: Continuous-Time Fractional Kelly Sizing (Fiedler Dampened)
         # f* = (mu - r) / sigma^2
         # We use All-Time Velocity as a proxy for the drift/variance ratio,
-        # and scale it by the eigenvector centrality to ensure it's a true sink.
+        # scale it by the eigenvector centrality to ensure it's a true sink,
+        # and explicitly dampen the overall sizing using the Spectral Laplacian Fiedler Value.
 
         # Kelly Fraction Approximation (Bounded)
         kelly_fractions = positive_nodes['All_Time_Velocity'] * eigen_centrality.loc[positive_nodes.index]
-        # Half-Kelly for safety
-        kelly_fractions = kelly_fractions * 0.5
+
+        # Second Depth Application: Self-calibrating thermodynamic system
+        # Standard was 0.5 (Half-Kelly). Now it dynamically ranges based on topological fragility.
+        dynamic_kelly_scale = 0.5 * fiedler_dampener
+        kelly_fractions = kelly_fractions * dynamic_kelly_scale
 
         # Normalize weights
         positive_nodes['Target_Weight_Pct'] = (kelly_fractions / kelly_fractions.sum()) * 100.0

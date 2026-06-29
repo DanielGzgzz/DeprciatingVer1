@@ -51,9 +51,13 @@ def evaluate_ticker(ticker):
         # We dynamically adjust based on topological safety. Safer assets = tighter stops, looser profit taking.
         safety_multiplier = max(0.5, min(1.5, 1.0 / (safety + 1e-6)))
 
-        buy_target = min(current_price, est_real_value) # Buy at or below real value
-        stop_loss = current_price * (1.0 - (0.08 * safety_multiplier))
-        take_profit = current_price * (1.0 + (0.175 / safety_multiplier))
+        # LOGICAL FIX: Buy parameters must be distinct from current position management
+        buy_target = min(current_price, est_real_value) # Maximum price to safely acquire shares
+
+        # Stop Loss and Take Profit should be calculated based on the *entry* price (buy_target),
+        # not the current price (which might be massively over-extended).
+        stop_loss = buy_target * (1.0 - (0.08 * safety_multiplier))
+        take_profit = buy_target * (1.0 + (0.175 / safety_multiplier))
 
         # Estimated Time Horizon from Spectral Analysis
         time_horizon = "Unknown"
@@ -148,8 +152,9 @@ def evaluate_portfolio():
             est_real_value = (sma_50 * 0.4) + (sma_200 * 0.6)
 
             safety_multiplier = max(0.5, min(1.5, 1.0 / (safety + 1e-6)))
-            stop_loss = current_price * (1.0 - (0.08 * safety_multiplier))
-            take_profit = current_price * (1.0 + (0.175 / safety_multiplier))
+            buy_target = min(current_price, est_real_value)
+            stop_loss = buy_target * (1.0 - (0.08 * safety_multiplier))
+            take_profit = buy_target * (1.0 + (0.175 / safety_multiplier))
 
             time_horizon = "Unknown"
             if ticker in spectral_results:

@@ -1,3 +1,4 @@
+import numpy as np
 import sys
 import pandas as pd
 import yfinance as yf
@@ -47,17 +48,17 @@ def evaluate_ticker(ticker):
         # Estimated Real Value is a weighted average of long-term and mid-term moving averages
         est_real_value = (sma_50 * 0.4) + (sma_200 * 0.6)
 
-        # The optimizer sweet spots: Stop Loss -8.0%, Take Profit +15.0% to +20.0%
-        # We dynamically adjust based on topological safety. Safer assets = tighter stops, looser profit taking.
-        safety_multiplier = max(0.5, min(1.5, 1.0 / (safety + 1e-6)))
-
         # LOGICAL FIX: Buy parameters must be distinct from current position management
         buy_target = min(current_price, est_real_value) # Maximum price to safely acquire shares
 
+        # Execute Dynamic Volatility Multiplier based on chunk training (M=2.0)
+        volatility = close_df[ticker].pct_change().rolling(window=30).std().iloc[-1] * np.sqrt(252)
+        dynamic_stop_pct = min(0.30, max(0.05, volatility * 2.0))
+
         # Stop Loss and Take Profit should be calculated based on the *entry* price (buy_target),
         # not the current price (which might be massively over-extended).
-        stop_loss = buy_target * (1.0 - (0.08 * safety_multiplier))
-        take_profit = buy_target * (1.0 + (0.175 / safety_multiplier))
+        stop_loss = buy_target * (1.0 - dynamic_stop_pct)
+        take_profit = buy_target * (1.0 + 0.15 + volatility)
 
         # Estimated Time Horizon from Spectral Analysis
         time_horizon = "Unknown"
@@ -74,21 +75,36 @@ def evaluate_ticker(ticker):
         print(f"Topological Safety:      {safety:.2f}")
         print(f"Optimal Matrix Weight:   {target:.2f}%")
 
-        print(f"\n--- Execution Parameters ---")
+        print(f"\n--- PRINTABLE EXECUTION PLAN ---")
         print(f"Current Price:           ${current_price:.2f}")
         print(f"Estimated Real Value:    ${est_real_value:.2f}")
         print(f"Optimal Buy Zone:        < ${buy_target:.2f}")
-        print(f"Mathematical Stop Loss:  ${stop_loss:.2f}")
-        print(f"Projected Take Profit:   ${take_profit:.2f}")
+        print(f"Dynamic Trailing Stop:   ${stop_loss:.2f} (Updates daily based on {dynamic_stop_pct*100:.1f}% rolling volatility)")
+        print(f"Adaptive Take Profit:    ${take_profit:.2f}")
         print(f"Estimated Time Horizon:  {time_horizon}")
 
         print(f"\n--- Systemic Verdict ---")
         if vel > 3.0:
-            print("Verdict: ACCUMULATE (Strong Structural Inflow)")
+            verdict = "ACCUMULATE (Strong Structural Inflow)"
         elif vel > 0:
-            print("Verdict: HOLD (Positive Flow)")
+            verdict = "HOLD (Positive Flow)"
         else:
-            print("Verdict: LIQUIDATE (Structural Vaporization Detected)")
+            verdict = "LIQUIDATE (Structural Vaporization Detected)"
+        print(f"Verdict: {verdict}")
+
+        # Save Printable Execution Plan
+        with open(f"Execution_Plan_{ticker}.txt", "w") as plan:
+            plan.write(f"THERMODYNAMIC EXECUTION PLAN: {ticker}\n")
+            plan.write("=========================================\n")
+            plan.write(f"Optimal Matrix Weight:   {target:.2f}%\n")
+            plan.write(f"Current Price:           ${current_price:.2f}\n")
+            plan.write(f"Estimated Real Value:    ${est_real_value:.2f}\n")
+            plan.write(f"Optimal Buy Zone:        < ${buy_target:.2f}\n")
+            plan.write(f"Dynamic Trailing Stop:   ${stop_loss:.2f} (Updates daily based on {dynamic_stop_pct*100:.1f}% rolling volatility)\n")
+            plan.write(f"Adaptive Take Profit:    ${take_profit:.2f}\n")
+            plan.write(f"Estimated Time Horizon:  {time_horizon}\n")
+            plan.write(f"Verdict:                 {verdict}\n")
+        print(f"\n[+] Saved Printable Execution Plan to Execution_Plan_{ticker}.txt")
     else:
         print(f"Data for {ticker} could not be resolved.")
 
@@ -151,10 +167,12 @@ def evaluate_portfolio():
             sma_200 = close_df[ticker].rolling(window=200).mean().iloc[-1]
             est_real_value = (sma_50 * 0.4) + (sma_200 * 0.6)
 
-            safety_multiplier = max(0.5, min(1.5, 1.0 / (safety + 1e-6)))
+            volatility = close_df[ticker].pct_change().rolling(window=30).std().iloc[-1] * np.sqrt(252)
+            dynamic_stop_pct = min(0.30, max(0.05, volatility * 2.0))
+
             buy_target = min(current_price, est_real_value)
-            stop_loss = buy_target * (1.0 - (0.08 * safety_multiplier))
-            take_profit = buy_target * (1.0 + (0.175 / safety_multiplier))
+            stop_loss = buy_target * (1.0 - dynamic_stop_pct)
+            take_profit = buy_target * (1.0 + 0.15 + volatility)
 
             time_horizon = "Unknown"
             if ticker in spectral_results:
@@ -168,7 +186,7 @@ def evaluate_portfolio():
 
             print(f"\n[{ticker}] Current Weight: {current_weight:.1f}% | Optimal Weight: {optimal_weight:.1f}% | Velocity: {vel:.2f}")
             print(f"   => Current Price: ${current_price:.2f} | Est. Real Value: ${est_real_value:.2f}")
-            print(f"   => Execution Limits: Stop Loss @ ${stop_loss:.2f} | Take Profit @ ${take_profit:.2f}")
+            print(f"   => Dynamic Limits: Trailing Stop @ ${stop_loss:.2f} (-{dynamic_stop_pct*100:.1f}%) | Take Profit @ ${take_profit:.2f}")
             print(f"   => Flow Horizon: {time_horizon}")
 
             if vel <= 0:
@@ -181,6 +199,32 @@ def evaluate_portfolio():
                 print(f"   => VERDICT: HOLD. Position is optimally sized.")
         else:
             print(f"\n[{ticker}] => VERDICT: UNKNOWN. Insufficient data to map in tensor.")
+
+    # Save Printable Portfolio Execution Plan
+    with open("Execution_Plan_Portfolio.txt", "w") as plan:
+        plan.write("THERMODYNAMIC PORTFOLIO EXECUTION PLAN\n")
+        plan.write("=========================================\n")
+        for ticker, val in holdings.items():
+            if ticker in metrics.index:
+                current_weight = (val / total_value) * 100.0
+                optimal_weight = metrics.loc[ticker, 'Target_Weight_Pct']
+                current_price = metrics.loc[ticker, 'Current_Price']
+                volatility = close_df[ticker].pct_change().rolling(window=30).std().iloc[-1] * np.sqrt(252)
+                dynamic_stop_pct = min(0.30, max(0.05, volatility * 2.0))
+                sma_50 = close_df[ticker].rolling(window=50).mean().iloc[-1]
+                sma_200 = close_df[ticker].rolling(window=200).mean().iloc[-1]
+                est_real_value = (sma_50 * 0.4) + (sma_200 * 0.6)
+                buy_target = min(current_price, est_real_value)
+                stop_loss = buy_target * (1.0 - dynamic_stop_pct)
+                take_profit = buy_target * (1.0 + 0.15 + volatility)
+
+                plan.write(f"\n[{ticker}]\n")
+                plan.write(f"  Target Weight: {optimal_weight:.1f}% (Current: {current_weight:.1f}%)\n")
+                plan.write(f"  Buy Zone:      < ${buy_target:.2f}\n")
+                plan.write(f"  Trailing Stop: ${stop_loss:.2f} (-{dynamic_stop_pct*100:.1f}%)\n")
+                plan.write(f"  Take Profit:   ${take_profit:.2f}\n")
+
+    print("\n[+] Saved Printable Portfolio Execution Plan to Execution_Plan_Portfolio.txt")
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:

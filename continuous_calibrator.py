@@ -167,7 +167,7 @@ if __name__ == "__main__":
         print(f"  Training Window: {tr_start} to {tr_end}")
         print(f"  Testing Window:  {te_start} to {test_end}")
 
-        best_M, algo_ret, spy_ret = run_calibration_chunk(close_df, vol_df, tr_start, tr_end, te_start, test_end, base_sl=0.08, base_tp=0.15)
+        best_M, algo_ret, spy_ret = run_calibration_chunk(close_df, vol_df, tr_start, tr_end, te_start, test_end, base_sl=0.06, base_tp=0.15)
 
         print(f"  => Discovered Optimal Volatility Multiplier: {best_M}x")
         print(f"  => Algorithm Blind OOS Return: {algo_ret:+.2f}%")

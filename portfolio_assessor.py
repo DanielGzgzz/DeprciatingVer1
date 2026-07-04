@@ -36,76 +36,76 @@ def evaluate_ticker(ticker):
         target = row['Target_Weight_Pct']
         safety = row['Topological_Safety']
         current_price = row['Current_Price']
+        flow_deriv = row.get('Flow_Derivative', 0.0)
+        vol_sat = row.get('Volume_Saturation', 1.0)
+        centrality = row.get('Eigenvector_Centrality', 0.1)
 
-        sma_50 = close_df[ticker].rolling(window=50).mean().iloc[-1]
-        sma_200 = close_df[ticker].rolling(window=200).mean().iloc[-1]
-        est_real_value = (sma_50 * 0.4) + (sma_200 * 0.6)
-        buy_target = min(current_price, est_real_value)
+        emergent_sectors = row.get('Emergent_Sectors', {})
+        if isinstance(emergent_sectors, dict) and emergent_sectors:
+            top_sector = max(emergent_sectors.items(), key=lambda x: x[1])
+            sector_str = f"{top_sector[0]} (Weight: {top_sector[1]:.2f})"
+        else:
+            sector_str = "Unknown"
 
-        volatility = close_df[ticker].pct_change().rolling(window=30).std().iloc[-1] * np.sqrt(252)
-        dynamic_stop_pct = min(0.30, max(0.05, volatility * 2.0))
+        z_score = 2.0 + (min(1.0, centrality) * 2.0)
 
-        # Stop Loss and Take Profit replaced by Chronological Waypoints
-        flow_deriv = row['Flow_Derivative']
-        vol_sat = row['Volume_Saturation']
+        sigma_hf = close_df[ticker].pct_change().rolling(window=14).std().iloc[-1] * current_price
+        if pd.isna(sigma_hf) or sigma_hf == 0:
+            sigma_hf = current_price * 0.02
+
+        hard_stop = current_price - (z_score * sigma_hf)
+        drawdown_pct = ((current_price - hard_stop) / current_price) * 100.0
+
+        projected_gain_pct = min(0.40, max(0.05, vel * centrality * 0.10))
+        hard_take_profit = current_price * (1.0 + projected_gain_pct)
+
         flow_state = "Accelerating" if flow_deriv > 0 else "Decelerating"
-        sat_state = "Saturating" if vol_sat > 1.2 else "Stable"
-
-        time_horizon = "Unknown"
-        days_horizon = 30
-        if ticker in spectral_results:
-            dom_band = spectral_results[ticker]['Dominant_Band']
-            if dom_band == "High-Frequency":
-                time_horizon = "1 to 14 Days (Noise/Tactical)"
-                days_horizon = 14
-            elif dom_band == "Mid-Frequency":
-                time_horizon = "15 to 90 Days (Cyclical Flow)"
-                days_horizon = 90
-            elif dom_band == "Low-Frequency":
-                time_horizon = "90+ Days (Structural Baseline)"
-                days_horizon = 180
 
         from datetime import datetime, timedelta
-        target_date_1 = (datetime.now() + timedelta(days=min(14, days_horizon//2))).strftime('%Y-%m-%d')
-        target_date_2 = (datetime.now() + timedelta(days=days_horizon)).strftime('%Y-%m-%d')
+        target_date_1 = (datetime.now() + timedelta(days=14)).strftime('%Y-%m-%d')
+        target_date_2 = (datetime.now() + timedelta(days=45)).strftime('%Y-%m-%d')
+        target_date_3 = (datetime.now() + timedelta(days=90)).strftime('%Y-%m-%d')
 
-        waypoint_logic = f"\n--- CHRONOLOGICAL WAYPOINT MATRIX ---\n"
-        waypoint_logic += f"Current Flow State: {flow_state} (dW/dt = {flow_deriv:.4f}) | Volume: {sat_state} (Sat Index = {vol_sat:.2f})\n"
-        waypoint_logic += f"\nWAYPOINT 1 [{target_date_1}]:\n"
-        if flow_deriv < -0.05:
-            waypoint_logic += f"  IF Price < ${buy_target:.2f} AND Flow remains Decelerating -> SELL (Derivative Stop-Loss Triggered).\n"
-        else:
-            waypoint_logic += f"  IF Price < ${buy_target:.2f} BUT Flow is Accelerating -> HOLD. Capital is rotating inward.\n"
+        print(f"Current Market Price: ${current_price:.2f}")
+        print(f"All-Time Velocity:    {vel:.2f}")
+        print(f"Emergent Sector:      {sector_str}")
+        print(f"Optimal Matrix Wt:    {target:.2f}%")
 
-        waypoint_logic += f"\nWAYPOINT 2 [{target_date_2}]:\n"
-        if vol_sat > 1.2:
-            waypoint_logic += f"  IF Volume Saturation persists (>1.2) -> SCALE OUT (Integral Take-Profit Triggered). Peak absorption reached.\n"
-        else:
-            waypoint_logic += f"  IF Target not met and Volume is Stable -> HOLD. Allow structural drift to continue.\n"
+        print(f"\n--- ABSOLUTE CIRCUIT BREAKERS (Calculated Failsafes) ---")
+        print(f"Max Noise Variance (σ_HF):  ${sigma_hf:.2f}")
+        print(f"Calculated Hard Stop:       ${hard_stop:.2f} (P_curr - {z_score:.1f}σ_HF) -> [ROUTE: SELL STOP MARKET]")
+        print(f"Calculated Take-Profit:     ${hard_take_profit:.2f} (Integral Peak) -> [ROUTE: SELL LIMIT]")
+        print(f"Risk Factor:                {drawdown_pct:.1f}% Drawdown to Stop")
 
-        print(f"All-Time Velocity Score: {vel:.2f}")
-        print(f"Topological Safety:      {safety:.2f}")
-        print(f"Optimal Matrix Weight:   {target:.2f}%")
-        print(waypoint_logic)
+        print(f"\n--- CHRONOLOGICAL WAYPOINT MATRIX (3 Horizons) ---")
+        print(f"Current Flow State: {flow_state} (dW/dt = {flow_deriv:+.4f}) | Saturation Index: {vol_sat:.2f}")
+
+        print(f"\nWAYPOINT 1 (High-Freq Noise Clearance) [{target_date_1}]:")
+        print(f"  IF Price < ${current_price:.2f} BUT Flow Acceleration (dW/dt) > 0.01:")
+        print(f"     -> ACTION: HOLD (Price is lagging continuous inflow).")
+        print(f"  ELSE (Flow is decelerating while price is down):")
+        print(f"     -> ACTION: ROUTE SELL MARKET (Thermodynamic thesis failed; leave early).")
+
+        print(f"\nWAYPOINT 2 (Mid-Freq Cyclical Check) [{target_date_2}]:")
+        print(f"  IF Saturation Index < 1.80 AND Eigenvector Centrality > 0.70:")
+        print(f"     -> ACTION: HOLD (Capital sink hasn't reached structural exhaustion).")
+        print(f"  ELSE (Saturation breached or Centrality decaying):")
+        print(f"     -> ACTION: ROUTE SELL 50% LIMIT @ CURRENT BID (Scale out).")
+
+        print(f"\nWAYPOINT 3 (Low-Freq Structural Target) [{target_date_3}]:")
+        print(f"  IF Integral Volume Target Achieved:")
+        print(f"     -> ACTION: ROUTE SELL LIMIT 100% (Rotate capital to new sink).")
+        print(f"  ELSE:")
+        print(f"     -> ACTION: RECALCULATE TENSOR AND GENERATE NEW 3-WAYPOINT TREE.")
 
         print(f"\n--- Systemic Verdict ---")
-        if vel > 3.0:
-            verdict = "ACCUMULATE (Strong Structural Inflow)"
-        elif vel > 0:
-            verdict = "HOLD (Positive Flow)"
+        if drawdown_pct > 10.0:
+            print(f"Verdict: REJECT (Risk Factor {drawdown_pct:.1f}% > 10.0% Portfolio Tolerance)")
+        elif vel <= 0:
+            print(f"Verdict: REJECT (Structural Vaporization Detected. Velocity {vel:.2f} <= 0)")
         else:
-            verdict = "LIQUIDATE (Structural Vaporization Detected)"
-        print(f"Verdict: {verdict}")
+            print(f"Verdict: EXECUTE BUY LIMIT @ ${current_price:.2f} (Target: {target:.2f}% Portfolio Weight)")
 
-        with open(f"Execution_Plan_{ticker}.txt", "w") as plan:
-            plan.write(f"THERMODYNAMIC EXECUTION PLAN: {ticker}\n")
-            plan.write("=========================================\n")
-            plan.write(f"Optimal Matrix Weight:   {target:.2f}%\n")
-            plan.write(f"Current Price:           ${current_price:.2f}\n")
-            plan.write(f"Estimated Real Value:    ${est_real_value:.2f}\n")
-            plan.write(waypoint_logic)
-            plan.write(f"\nVerdict:                 {verdict}\n")
-        print(f"\n[+] Saved Printable Execution Plan to Execution_Plan_{ticker}.txt")
     else:
         print(f"Data for {ticker} could not be resolved.")
 

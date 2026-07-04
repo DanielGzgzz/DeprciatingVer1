@@ -1215,7 +1215,7 @@ def perform_ml_analysis(close_data, vol_data, metrics):
 
         # Second Depth Application: Self-calibrating thermodynamic system
         # Standard was 0.5 (Half-Kelly). Now it dynamically ranges based on topological fragility.
-        dynamic_kelly_scale = 0.5 * fiedler_dampener
+        dynamic_kelly_scale = 1.0 * fiedler_dampener
         kelly_fractions = kelly_fractions * dynamic_kelly_scale
 
         # Normalize weights

@@ -38,6 +38,7 @@ core_nodes = [
     "EURUSD=X", "JPY=X", "GBPUSD=X", "AUDUSD=X", "NZDUSD=X", "CAD=X", "CHF=X", "ILS=X",
     "BTC-USD", "ETH-USD",
     "CL=F", "GC=F", "SI=F", "HG=F",
+    "XLK", "XLF", "XLE", "XLV", "XLY", "XLI", "XLC", "XLP", "XLU", "XLRE", "XLB",
     "TSM", "ASML", "NVO", "NVS", "BABA", "TM", "TTE"
 ]
 

@@ -147,7 +147,6 @@ SYMBOLS = [
     "C",
     "CACI",
     "CAD=X",
-    "CAG",
     "CAH",
     "CAR",
     "CARR",
@@ -428,6 +427,7 @@ SYMBOLS = [
     "HOG",
     "HOMB",
     "HON",
+    "HONA",
     "HOOD",
     "HPE",
     "HPQ",
@@ -933,6 +933,17 @@ SYMBOLS = [
     "WY",
     "WYNN",
     "XEL",
+    "XLB",
+    "XLC",
+    "XLE",
+    "XLF",
+    "XLI",
+    "XLK",
+    "XLP",
+    "XLRE",
+    "XLU",
+    "XLV",
+    "XLY",
     "XOM",
     "XPO",
     "XRAY",
@@ -1012,54 +1023,39 @@ def calculate_indicators(close_data, vol_data):
     print("Calculating All-Time Velocity Scores & Volume Derivatives...")
     latest_prices = close_data.iloc[-1]
 
-    # 1. All-Time Velocity Score (Long-Term Structural Drift)
-    # Computed as the annualized geometric mean return normalized by variance (Sharpe-like structural flow)
-    # We drop NAs per column to get true history length
     def calc_velocity(series):
         s = series.dropna()
-        if len(s) < 252: # Need at least a year of data
+        if len(s) < 252:
             return 0.0
         returns = s.pct_change().dropna()
         if len(returns) == 0 or returns.std() == 0:
             return 0.0
-        # Annualized drift over variance
         drift = returns.mean() * 252
         volatility = returns.std() * np.sqrt(252)
-        # Scale to a readable score (-10 to +10 roughly)
         score = (drift / volatility) * 5.0
         return score
 
     all_time_velocity = close_data.apply(calc_velocity)
 
-    # Calculate a proxy for topological safety (inverse of overall variance)
     safety_score = 1.0 / (close_data.pct_change().std() * np.sqrt(252) + 1e-6)
 
-    # 2. Volume Flow Tensor Components (Rolling Volume Derivatives)
-    # V_i(t): the 30-day rolling average volume relative to its 1-year average
     vol_30d = vol_data.rolling(window=30).mean().iloc[-1]
     vol_252d = vol_data.rolling(window=252).mean().iloc[-1]
-    # Replace zeros or NaNs to avoid division errors
     vol_252d = vol_252d.replace(0, np.nan).fillna(vol_30d)
 
-    # Volume derivative/ratio: >1 means liquidity is expanding into the node
-    volume_derivative = (vol_30d / vol_252d).fillna(1.0)
+    raw_volume_derivative = (vol_30d / vol_252d).fillna(1.0)
+    volume_derivative = np.tanh(raw_volume_derivative) # Bounds friction between 0 and 1
 
-
-    # Advanced Metric 1: Kuramoto Phase Synchronization (Global Crash Predictor)
     print("Computing Kuramoto Phase Synchronization Dynamics...")
-    # Extract phase using Hilbert transform on normalized returns
     returns = close_data.pct_change().dropna()
     if len(returns) > 30:
         detrended = returns - returns.mean()
         analytic_signal = hilbert(detrended, axis=0)
         instantaneous_phase = np.unwrap(np.angle(analytic_signal), axis=0)
 
-        # Calculate Kuramoto order parameter r(t) for the last 30 days
-        # r * e^(i * psi) = 1/N * sum(e^(i * theta_j))
         N_assets = instantaneous_phase.shape[1]
         complex_phases = np.exp(1j * instantaneous_phase[-30:])
         r_t = np.abs(np.sum(complex_phases, axis=1) / N_assets)
-        # Average synchronization over the last month
         global_kuramoto_sync = np.mean(r_t)
     else:
         global_kuramoto_sync = 0.0
@@ -1072,7 +1068,6 @@ def calculate_indicators(close_data, vol_data):
         'Variance': close_data.pct_change().var() * 252
     })
 
-    # Attach global parameter to the first row just to pass it along cleanly
     metrics.loc[metrics.index[0], 'Global_Kuramoto_Sync'] = global_kuramoto_sync
 
     return metrics
@@ -1097,6 +1092,49 @@ def perform_ml_analysis(close_data, vol_data, metrics):
     wealth_flow_matrix = corr_matrix.values * volume_friction_matrix
     np.fill_diagonal(wealth_flow_matrix, 0)
     wealth_flow_df = pd.DataFrame(wealth_flow_matrix, index=corr_matrix.index, columns=corr_matrix.columns)
+
+    # --- CONTINUOUS RISK MANIFOLD: DERIVATIVES & INTEGRALS ---
+    # We calculate the derivative of the flow leaving a node (acceleration of outflow)
+    # Since we have static snapshots, we proxy the derivative via short term vs long term flow.
+    # We calculate the integral of the flow (cumulative volume saturation)
+
+    recent_returns = returns.iloc[-10:] # last 10 days
+    recent_corr = recent_returns.corr().fillna(0)
+    recent_flow = recent_corr.values * volume_friction_matrix
+    np.fill_diagonal(recent_flow, 0)
+    recent_flow_df = pd.DataFrame(recent_flow, index=corr_matrix.index, columns=corr_matrix.columns)
+
+    # Derivative dW/dt (Acceleration of flow)
+    # If recent flow is significantly lower than long-term flow, dW/dt is negative.
+    flow_derivative = (recent_flow_df.sum(axis=0) - wealth_flow_df.sum(axis=0)) / 10.0
+    metrics['Flow_Derivative'] = flow_derivative
+
+    # Integral ∫W dτ (Cumulative Volume Saturation)
+    # We integrate the raw volume over the last 90 days to proxy saturation
+    cumulative_volume = vol_data.iloc[-90:].sum(axis=0)
+    # Normalize by 1-year volume to get a saturation index
+    annual_volume = vol_data.iloc[-252:].sum(axis=0)
+    saturation_index = (cumulative_volume / (annual_volume + 1e-6)) * (252/90.0) # > 1 means saturating
+    metrics['Volume_Saturation'] = saturation_index
+
+    # --- EMERGENT SECTORIAL MAPPING (SOFT CLUSTERING) ---
+    print("Executing Sector Seedation (Soft Clustering)...")
+    sector_seeds = ["XLK", "XLF", "XLE", "XLV", "XLY", "XLI", "XLC", "XLP", "XLU", "XLRE", "XLB"]
+    available_seeds = [s for s in sector_seeds if s in corr_matrix.columns]
+
+    emergent_sectors = {}
+    if available_seeds:
+        for ticker in corr_matrix.columns:
+            # Get flow connections from this ticker to all seeds
+            seed_flows = wealth_flow_df.loc[available_seeds, ticker].clip(lower=0)
+            total_seed_flow = seed_flows.sum()
+            if total_seed_flow > 0:
+                fractional_weights = seed_flows / total_seed_flow
+                emergent_sectors[ticker] = fractional_weights.to_dict()
+            else:
+                emergent_sectors[ticker] = {s: 0.0 for s in available_seeds}
+    metrics['Emergent_Sectors'] = pd.Series(emergent_sectors)
+
 
     # Advanced Metric 2: Eigenvector Flow Centrality
     print("Calculating Eigenvector Centrality (True Capital Sinks)...")

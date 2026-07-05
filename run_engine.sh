@@ -34,7 +34,7 @@ ${CYAN}MAIN MENU:${NC}"
     echo "  [8] Run Concentrated Top-5 NIS Backtest"
     echo "  [9] Quit"
 
-    read -p "Select an option [1-9]: " option
+    read -p "Select an option [1-10]: " option
 
     case $option in
         1)
@@ -97,6 +97,7 @@ ${GREEN}Executing Heavy Continuous Calibration...${NC}"
             python3 continuous_calibrator.py
             ;;
 
+
         8)
             echo -e "
 ${GREEN}Running 50,000 NIS Top 5 Concentrated Backtest...${NC}"
@@ -104,11 +105,16 @@ ${GREEN}Running 50,000 NIS Top 5 Concentrated Backtest...${NC}"
             ;;
         9)
             echo -e "
+${GREEN}Running Fee & Tax Optimization Matrix...${NC}"
+            python3 fee_tax_backtest.py
+            ;;
+        10)
+            echo -e "
 ${CYAN}Shutting down Thermodynamic Engine...${NC}"
             break
             ;;
         *)
-            echo -e "${RED}Invalid option. Please select 1-9.${NC}"
+            echo -e "${RED}Invalid option. Please select 1-10.${NC}"
             ;;
     esac
 done

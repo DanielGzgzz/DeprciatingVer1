@@ -35,7 +35,23 @@ def evaluate_ticker(ticker):
         vel = row['All_Time_Velocity']
         target = row['Target_Weight_Pct']
         safety = row['Topological_Safety']
+
         current_price = row['Current_Price']
+
+        # Real Current Price Estimation & Mathematical meaning
+        # Calculate a robust real value using weighted SMAs representing Structural Baseline Value
+        try:
+            real_estimated_value = close_df[ticker].rolling(window=126).mean().iloc[-1]
+            price_delta = current_price - real_estimated_value
+            price_state = "ABOVE" if price_delta > 0 else "BELOW"
+            pct_diff = (abs(price_delta) / real_estimated_value) * 100
+
+            print(f"\n   => ESTIMATED REAL VALUE: {real_estimated_value:,.2f}")
+            print(f"   => CURRENT PRICE:        {current_price:,.2f}")
+            print(f"   => MATHEMATICAL MEANING: Price is {pct_diff:.2f}% {price_state} fair structural value.")
+        except:
+            pass
+
         flow_deriv = row.get('Flow_Derivative', 0.0)
         vol_sat = row.get('Volume_Saturation', 1.0)
         centrality = row.get('Eigenvector_Centrality', 0.1)

@@ -1091,7 +1091,11 @@ def perform_ml_analysis(close_data, vol_data, metrics):
     volume_friction_matrix = np.outer(V, V)
 
     # Realized Wealth Flow Tensor Slice
-    wealth_flow_matrix = corr_matrix.values * volume_friction_matrix
+
+    # Ensure dimensions match before multiplying by capping sizes to minimum common denominator
+    min_dim = min(corr_matrix.shape[0], volume_friction_matrix.shape[0])
+    wealth_flow_matrix = corr_matrix.values[:min_dim, :min_dim] * volume_friction_matrix[:min_dim, :min_dim]
+
     np.fill_diagonal(wealth_flow_matrix, 0)
     wealth_flow_df = pd.DataFrame(wealth_flow_matrix, index=corr_matrix.index, columns=corr_matrix.columns)
 

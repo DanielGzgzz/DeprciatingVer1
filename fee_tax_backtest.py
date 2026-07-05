@@ -155,7 +155,7 @@ def optimize_strategy():
 
             if net_ret > best_return:
                 best_return = net_ret
-                best_params = {"Freq": freq, "Pos": pos, "NetRet": net_ret, "NetProf": net_prof}
+                best_params = {"Freq": freq, "Pos": pos, "NetRet": net_ret, "NetProf": net_prof, "SpyRet": spy_ret}
 
     print("\n" + "="*80)
     print("OPTIMIZATION RESULTS (After 60 NIS per trade + 25% Tax)")
@@ -165,7 +165,14 @@ def optimize_strategy():
 
     print("-" * 80)
     print(f"BEST METHOD: Rebalance every {best_params['Freq']} days with Top {best_params['Pos']} positions.")
-    print(f"Best Net Return: {best_params['NetRet']:.2f}% | Best Net Profit: {best_params['NetProf']:.2f} NIS")
+    print(f"Best Net Return: {best_params['NetRet']:+.2f}% | Best Net Profit: {best_params['NetProf']:.2f} NIS")
+    print(f"SPY Benchmark Return: {best_params['SpyRet']:+.2f}%")
+
+    diff = best_params['NetRet'] - best_params['SpyRet']
+    if diff > 0:
+        print(f"\n=> SUCCESS: Outperformed the SPY benchmark by {diff:.2f}% (After Fees & Taxes)")
+    else:
+        print(f"\n=> UNDERPERFORMANCE: Trailed the SPY benchmark by {-diff:.2f}% (After Fees & Taxes)")
     print("="*80)
 
 if __name__ == "__main__":

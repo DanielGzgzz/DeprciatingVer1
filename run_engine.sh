@@ -31,9 +31,10 @@ ${CYAN}MAIN MENU:${NC}"
     echo "  [5] Export Previous Scan Results (TXT & Deep-Dive PDF)"
     echo "  [6] Quick Test (Simulate Last 30 Days)"
     echo "  [7] Train & Calibrate (Matrix Roaming & Optimization)"
-    echo "  [8] Quit"
+    echo "  [8] Run Concentrated Top-5 NIS Backtest"
+    echo "  [9] Quit"
 
-    read -p "Select an option [1-8]: " option
+    read -p "Select an option [1-9]: " option
 
     case $option in
         1)
@@ -95,13 +96,19 @@ except Exception as e:
 ${GREEN}Executing Heavy Continuous Calibration...${NC}"
             python3 continuous_calibrator.py
             ;;
+
         8)
+            echo -e "
+${GREEN}Running 50,000 NIS Top 5 Concentrated Backtest...${NC}"
+            python3 concentrated_backtest.py
+            ;;
+        9)
             echo -e "
 ${CYAN}Shutting down Thermodynamic Engine...${NC}"
             break
             ;;
         *)
-            echo -e "${RED}Invalid option. Please select 1-8.${NC}"
+            echo -e "${RED}Invalid option. Please select 1-9.${NC}"
             ;;
     esac
 done

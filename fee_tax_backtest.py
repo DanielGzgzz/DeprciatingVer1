@@ -175,5 +175,28 @@ def optimize_strategy():
         print(f"\n=> UNDERPERFORMANCE: Trailed the SPY benchmark by {-diff:.2f}% (After Fees & Taxes)")
     print("="*80)
 
+
+def run_capital_scaling_test():
+    print("\n" + "="*80)
+    print("CAPITAL SCALING TEST (Fee Drag Analysis)")
+    print("="*80)
+    close_df, vol_df = fetch_data_with_fx("2023-01-01", "2024-01-01")
+    allocs = run_allocations(close_df, vol_df, "2023-01-01", 63, 5)
+
+    capitals = [50000.0, 250000.0, 1000000.0]
+    global INITIAL_BALANCE_NIS
+
+    for cap in capitals:
+        INITIAL_BALANCE_NIS = cap
+        net_ret, spy_ret, fees, tax, net_prof = execute_backtest(close_df, allocs)
+        print(f"Starting Capital: {cap:10,.0f} NIS")
+        print(f"Fees Paid:        {fees:10,.0f} NIS")
+        print(f"Taxes Paid:       {tax:10,.0f} NIS")
+        print(f"Algorithm Net Return: {net_ret:+.2f}%")
+        print(f"SPY Net Return:       {spy_ret:+.2f}%")
+        diff = net_ret - spy_ret
+        print(f"Diff vs SPY:          {diff:+.2f}%\n")
+
 if __name__ == "__main__":
+    run_capital_scaling_test()
     optimize_strategy()

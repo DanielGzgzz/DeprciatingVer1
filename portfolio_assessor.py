@@ -93,34 +93,21 @@ def evaluate_ticker(ticker):
         print(f"Calculated Take-Profit:     ${hard_take_profit:.2f} (Integral Peak) -> [ROUTE: SELL LIMIT]")
         print(f"Risk Factor:                {drawdown_pct:.1f}% Drawdown to Stop")
 
-        print(f"\n--- CHRONOLOGICAL WAYPOINT MATRIX (3 Horizons) ---")
-        print(f"Current Flow State: {flow_state} (dW/dt = {flow_deriv:+.4f}) | Saturation Index: {vol_sat:.2f}")
 
-        print(f"\nWAYPOINT 1 (High-Freq Noise Clearance) [{target_date_1}]:")
-        print(f"  IF Price < ${current_price:.2f} BUT Flow Acceleration (dW/dt) > 0.01:")
-        print(f"     -> ACTION: HOLD (Price is lagging continuous inflow).")
-        print(f"  ELSE (Flow is decelerating while price is down):")
-        print(f"     -> ACTION: ROUTE SELL MARKET (Thermodynamic thesis failed; leave early).")
 
-        print(f"\nWAYPOINT 2 (Mid-Freq Cyclical Check) [{target_date_2}]:")
-        print(f"  IF Saturation Index < 1.80 AND Eigenvector Centrality > 0.70:")
-        print(f"     -> ACTION: HOLD (Capital sink hasn't reached structural exhaustion).")
-        print(f"  ELSE (Saturation breached or Centrality decaying):")
-        print(f"     -> ACTION: ROUTE SELL 50% LIMIT @ CURRENT BID (Scale out).")
-
-        print(f"\nWAYPOINT 3 (Low-Freq Structural Target) [{target_date_3}]:")
-        print(f"  IF Integral Volume Target Achieved:")
-        print(f"     -> ACTION: ROUTE SELL LIMIT 100% (Rotate capital to new sink).")
-        print(f"  ELSE:")
-        print(f"     -> ACTION: RECALCULATE TENSOR AND GENERATE NEW 3-WAYPOINT TREE.")
-
-        print(f"\n--- Systemic Verdict ---")
+        print(f"\n--- Systemic Verdict & Strategic Guidelines ---")
         if drawdown_pct > 10.0:
             print(f"Verdict: REJECT (Risk Factor {drawdown_pct:.1f}% > 10.0% Portfolio Tolerance)")
         elif vel <= 0:
             print(f"Verdict: REJECT (Structural Vaporization Detected. Velocity {vel:.2f} <= 0)")
         else:
             print(f"Verdict: EXECUTE BUY LIMIT @ ${current_price:.2f} (Target: {target:.2f}% Portfolio Weight)")
+
+        print(f"\n   [STRATEGIC ELABORATION]")
+        print(f"   Current Flow State is {flow_state} (dW/dt = {flow_deriv:+.4f}) with a Saturation Index of {vol_sat:.2f}.")
+        print(f"   => Near-term ({target_date_1}): If price drops but flow acceleration remains positive (>0.01), HOLD. If flow decelerates, SELL.")
+        print(f"   => Mid-term ({target_date_2}): Monitor the capital sink. If Saturation breaches 1.80 or Centrality decays below 0.70, scale out 50%.")
+        print(f"   => Long-term ({target_date_3}): Upon hitting structural volume targets, rotate 100% of capital to a new sink.")
 
     else:
         print(f"Data for {ticker} could not be resolved.")

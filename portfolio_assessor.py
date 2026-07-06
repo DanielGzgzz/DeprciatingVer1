@@ -2,10 +2,13 @@ import numpy as np
 import sys
 import pandas as pd
 import yfinance as yf
+from datetime import datetime
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
 from market_analyzer import SYMBOLS, fetch_data, calculate_indicators, perform_ml_analysis, perform_spectral_analysis
 
 def evaluate_ticker(ticker):
-    print(f"\n--- Thermodynamic Assessment for [{ticker}] ---")
 
     core_benchmarks = ["SPY", "QQQ", "TLT", "GLD", "XOM", "JNJ", "MSFT", "AAPL"]
     if ticker not in core_benchmarks:
@@ -21,96 +24,97 @@ def evaluate_ticker(ticker):
             close_df, vol_df = fetch_data(temp_symbols)
             metrics = calculate_indicators(close_df, vol_df)
             metrics, vapor = perform_ml_analysis(close_df, vol_df, metrics)
-
-            target_node = metrics.loc[[ticker]] if ticker in metrics.index else pd.DataFrame()
-            if not target_node.empty:
-                spectral_results = perform_spectral_analysis(close_df, target_node)
-            else:
-                spectral_results = {}
         finally:
             sys.stdout = old_stdout
 
     if ticker in metrics.index:
         row = metrics.loc[ticker]
+
+        price = row['Current_Price']
+
+        try:
+            real_value = close_df[ticker].rolling(window=126).mean().iloc[-1]
+        except:
+            real_value = price
+
         vel = row['All_Time_Velocity']
         target = row['Target_Weight_Pct']
-        safety = row['Topological_Safety']
-
-        current_price = row['Current_Price']
-
-        # Real Current Price Estimation & Mathematical meaning
-        # Calculate a robust real value using weighted SMAs representing Structural Baseline Value
-        try:
-            real_estimated_value = close_df[ticker].rolling(window=126).mean().iloc[-1]
-            price_delta = current_price - real_estimated_value
-            price_state = "ABOVE" if price_delta > 0 else "BELOW"
-            pct_diff = (abs(price_delta) / real_estimated_value) * 100
-
-            print(f"\n   => ESTIMATED REAL VALUE: {real_estimated_value:,.2f}")
-            print(f"   => CURRENT PRICE:        {current_price:,.2f}")
-            print(f"   => MATHEMATICAL MEANING: Price is {pct_diff:.2f}% {price_state} fair structural value.")
-        except:
-            pass
-
-        flow_deriv = row.get('Flow_Derivative', 0.0)
-        vol_sat = row.get('Volume_Saturation', 1.0)
         centrality = row.get('Eigenvector_Centrality', 0.1)
+        global_r = metrics.loc[metrics.index[0], 'Global_Kuramoto_Sync'] if 'Global_Kuramoto_Sync' in metrics.columns else 0.0
+        lambda2 = metrics.loc[metrics.index[0], 'Fiedler_Value'] if 'Fiedler_Value' in metrics.columns else 0.5
 
-        emergent_sectors = row.get('Emergent_Sectors', {})
-        if isinstance(emergent_sectors, dict) and emergent_sectors:
-            top_sector = max(emergent_sectors.items(), key=lambda x: x[1])
-            sector_str = f"{top_sector[0]} (Weight: {top_sector[1]:.2f})"
-        else:
-            sector_str = "Unknown"
-
+        # Calculate stops
         z_score = 2.0 + (min(1.0, centrality) * 2.0)
+        sigma_hf = close_df[ticker].pct_change().rolling(window=14).std().iloc[-1] * price
+        if pd.isna(sigma_hf) or sigma_hf == 0: sigma_hf = price * 0.02
 
-        sigma_hf = close_df[ticker].pct_change().rolling(window=14).std().iloc[-1] * current_price
-        if pd.isna(sigma_hf) or sigma_hf == 0:
-            sigma_hf = current_price * 0.02
-
-        hard_stop = current_price - (z_score * sigma_hf)
-        drawdown_pct = ((current_price - hard_stop) / current_price) * 100.0
+        sl = price - (z_score * sigma_hf)
 
         projected_gain_pct = min(0.40, max(0.05, vel * centrality * 0.10))
-        hard_take_profit = current_price * (1.0 + projected_gain_pct)
+        tp = price * (1.0 + projected_gain_pct)
 
-        flow_state = "Accelerating" if flow_deriv > 0 else "Decelerating"
+        drawdown_pct = ((price - sl) / price) * 100.0
 
-        from datetime import datetime, timedelta
-        target_date_1 = (datetime.now() + timedelta(days=14)).strftime('%Y-%m-%d')
-        target_date_2 = (datetime.now() + timedelta(days=45)).strftime('%Y-%m-%d')
-        target_date_3 = (datetime.now() + timedelta(days=90)).strftime('%Y-%m-%d')
+        # Calculate Confidence derived from fiedler lambda2 (scaling 0.0 to 1.0 into 0-100%)
+        # Cap lambda2 to a reasonable max scale of ~2.0 for standard graph
+        confidence = min(99, max(1, int((lambda2 / 1.5) * 100)))
 
-        print(f"Current Market Price: ${current_price:.2f}")
-        print(f"All-Time Velocity:    {vel:.2f}")
-        print(f"Emergent Sector:      {sector_str}")
-        print(f"Optimal Matrix Wt:    {target:.2f}%")
-
-        print(f"\n--- ABSOLUTE CIRCUIT BREAKERS (Calculated Failsafes) ---")
-        print(f"Max Noise Variance (σ_HF):  ${sigma_hf:.2f}")
-        print(f"Calculated Hard Stop:       ${hard_stop:.2f} (P_curr - {z_score:.1f}σ_HF) -> [ROUTE: SELL STOP MARKET]")
-        print(f"Calculated Take-Profit:     ${hard_take_profit:.2f} (Integral Peak) -> [ROUTE: SELL LIMIT]")
-        print(f"Risk Factor:                {drawdown_pct:.1f}% Drawdown to Stop")
-
-
-
-        print(f"\n--- Systemic Verdict & Strategic Guidelines ---")
+        # Verdict Logic
         if drawdown_pct > 10.0:
-            print(f"Verdict: REJECT (Risk Factor {drawdown_pct:.1f}% > 10.0% Portfolio Tolerance)")
+            verdict = "EXIT / REJECT (Risk Factor > 10%)"
         elif vel <= 0:
-            print(f"Verdict: REJECT (Structural Vaporization Detected. Velocity {vel:.2f} <= 0)")
+            verdict = "EXIT / REJECT (Structural Vaporization)"
         else:
-            print(f"Verdict: EXECUTE BUY LIMIT @ ${current_price:.2f} (Target: {target:.2f}% Portfolio Weight)")
+            verdict = "BUY / ACCUMULATE"
 
-        print(f"\n   [STRATEGIC ELABORATION]")
-        print(f"   Current Flow State is {flow_state} (dW/dt = {flow_deriv:+.4f}) with a Saturation Index of {vol_sat:.2f}.")
-        print(f"   => Near-term ({target_date_1}): If price drops but flow acceleration remains positive (>0.01), HOLD. If flow decelerates, SELL.")
-        print(f"   => Mid-term ({target_date_2}): Monitor the capital sink. If Saturation breaches 1.80 or Centrality decays below 0.70, scale out 50%.")
-        print(f"   => Long-term ({target_date_3}): Upon hitting structural volume targets, rotate 100% of capital to a new sink.")
+        # Draw Panel
+        console = Console()
+        content = Text()
+        content.append(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Status: Market Open\n", style="dim")
+        content.append("─" * 58 + "\n", style="dim")
 
+        content.append(f"  Current Price:   ", style="bold")
+        content.append(f"${price:.2f}\n", style="cyan")
+
+        content.append(f"  Real Value:      ", style="bold")
+        content.append(f"${real_value:.2f}  (Tensor Matrix Flow)\n", style="magenta")
+
+        content.append("─" * 58 + "\n", style="dim")
+
+        content.append(f"  Take Profit:     ", style="bold")
+        content.append(f"${tp:.2f}  (Phase Target)\n", style="green")
+
+        content.append(f"  Stop Loss:       ", style="bold")
+        content.append(f"${sl:.2f}  (Topological Support)\n", style="red")
+
+        content.append("─" * 58 + "\n", style="dim")
+
+        content.append(f"  Confidence vs SP500:  ", style="bold")
+        content.append(f"{confidence}%  (λ₂ = {lambda2:.2f})\n", style="yellow")
+
+        v_style = "bold green" if "BUY" in verdict else "bold red"
+        content.append(f"  Verdict:              ", style="bold")
+        content.append(f"{verdict}\n", style=v_style)
+
+        content.append("─" * 58 + "\n", style="dim")
+        content.append(f" [SYSTEM] Global Phase Lock r(t) = {global_r:.2f}. ", style="dim")
+        if global_r > 0.8:
+            content.append("CRITICAL FLIGHT RISK DETECTED.", style="bold red")
+        else:
+            content.append("System stable. No crash footprint.", style="green")
+
+        panel = Panel(
+            content,
+            title=f"[bold white]TSME TICKER MONITOR: {ticker}[/bold white]",
+            expand=False,
+            border_style="blue" if global_r <= 0.8 else "red"
+        )
+        print("\n")
+        console.print(panel)
+        print("\n")
     else:
         print(f"Data for {ticker} could not be resolved.")
+
 
 def evaluate_portfolio():
     print("\n--- Enter Portfolio Holdings ---")

@@ -1059,8 +1059,13 @@ def calculate_indicators(close_data, vol_data):
         complex_phases = np.exp(1j * instantaneous_phase[-30:])
         r_t = np.abs(np.sum(complex_phases, axis=1) / N_assets)
         global_kuramoto_sync = np.mean(r_t)
+
+        # Calculate Phase Acceleration r_dot(t)
+        r_dot_t = np.diff(r_t)
+        kuramoto_phase_acceleration = r_dot_t[-1] if len(r_dot_t) > 0 else 0.0
     else:
         global_kuramoto_sync = 0.0
+        kuramoto_phase_acceleration = 0.0
 
     metrics = pd.DataFrame({
         'Current_Price': latest_prices,
@@ -1071,6 +1076,7 @@ def calculate_indicators(close_data, vol_data):
     })
 
     metrics.loc[metrics.index[0], 'Global_Kuramoto_Sync'] = global_kuramoto_sync
+    metrics.loc[metrics.index[0], 'Kuramoto_Phase_Accel'] = kuramoto_phase_acceleration
 
     return metrics
 
@@ -1249,6 +1255,16 @@ def perform_ml_analysis(close_data, vol_data, metrics):
 
     # Read Kuramoto Sync
     global_sync = metrics['Global_Kuramoto_Sync'].iloc[0] if 'Global_Kuramoto_Sync' in metrics.columns else 0.0
+    phase_accel = metrics['Kuramoto_Phase_Accel'].iloc[0] if 'Kuramoto_Phase_Accel' in metrics.columns else 0.0
+
+    # Calculate Topological Graph Distance for Dynamic Havens
+    # Distance(i, market) = sqrt( 2 * (1 - mean_corr_i) / lambda_2 )
+    mean_corr = corr_matrix.mean(axis=1)
+    # Avoid division by zero by clamping lambda_2 (fiedler_val)
+    clamped_fiedler = max(fiedler_val, 1e-5)
+    topological_distance = np.sqrt(np.maximum(2 * (1 - mean_corr) / clamped_fiedler, 0))
+    metrics['Topological_Distance'] = topological_distance
+    metrics.loc[metrics.index[0], 'Fiedler_Value'] = fiedler_val
     vaporization_risk = []
 
     # Kuramoto Crash Override

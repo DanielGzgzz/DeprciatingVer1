@@ -51,10 +51,16 @@ def run_concentrated_allocations(close_df, vol_df, test_start_date):
         targets = {ticker: 0.0 for ticker in TEST_SYMBOLS if ticker != "ILS=X"}
 
         if is_crashing:
-            # 50/50 safe haven split
-            for safe_asset in SAFE_HAVENS:
-                if safe_asset in targets:
-                    targets[safe_asset] = 0.5
+            # Dynamic Topological Haven: Select assets furthest from the synchronizing liquidating cluster
+            if 'Topological_Distance' in tradeable_metrics.columns:
+                dynamic_havens = tradeable_metrics.sort_values(by='Topological_Distance', ascending=False).head(2)
+                weight_per_haven = 1.0 / len(dynamic_havens) if len(dynamic_havens) > 0 else 0
+                for ticker in dynamic_havens.index:
+                    targets[ticker] = weight_per_haven
+            else:
+                for safe_asset in SAFE_HAVENS:
+                    if safe_asset in targets:
+                        targets[safe_asset] = 0.5
         else:
             # Picky Top 5 methodology
             # Rank strictly by target weight (which encompasses velocity, safety, and centrality)

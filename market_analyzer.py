@@ -50,6 +50,7 @@ SYMBOLS = [
     "ALL",
     "ALLE",
     "ALLY",
+    "ALSN",
     "ALV",
     "AM",
     "AMAT",
@@ -404,7 +405,6 @@ SYMBOLS = [
     "GPN",
     "GRMN",
     "GS",
-    "GT",
     "GTLS",
     "GWRE",
     "GWW",
@@ -1073,6 +1073,64 @@ def calculate_indicators(close_data, vol_data):
     metrics.loc[metrics.index[0], 'Global_Kuramoto_Sync'] = global_kuramoto_sync
 
     return metrics
+
+
+def calculate_dynamic_lags_and_coupling(close_df, vol_df, max_lag=10):
+    print("\n[MATH ENGINE] Extracting Endogenous Information Flow (Tau & K)...")
+    returns = close_df.pct_change().fillna(0)
+
+    # Calculate Phase Divergence and Lags
+    tickers = returns.columns
+    n = len(tickers)
+
+    tau_matrix = pd.DataFrame(0, index=tickers, columns=tickers)
+    k_matrix = pd.DataFrame(0.0, index=tickers, columns=tickers)
+
+    # Simplified Time-Lagged Cross Correlation peak extraction for performance on 900+ nodes
+    # For large matrices, we use pandas shift correlation
+    for i, t_i in enumerate(tickers[:50]): # Limiting to top 50 core nodes for compute speed
+        for j, t_j in enumerate(tickers[:50]):
+            if i == j: continue
+
+            # Find tau that maximizes correlation
+            best_tau = 0
+            best_corr = 0.0
+
+            for lag in range(1, max_lag + 1):
+                corr = returns[t_i].corr(returns[t_j].shift(lag))
+                if abs(corr) > abs(best_corr):
+                    best_corr = corr
+                    best_tau = lag
+
+            tau_matrix.loc[t_i, t_j] = best_tau
+            k_matrix.loc[t_i, t_j] = best_corr
+
+    return tau_matrix, k_matrix
+
+def generate_alpha_triggers(metrics_df, tau_matrix, k_matrix, vol_df):
+    print("\n[MATH ENGINE] Scanning for Phase Divergence & Bottlenecks...")
+
+    # Calculate average daily volume
+    adv = vol_df.mean()
+    metrics_df['ADV'] = adv
+
+    alerts = []
+
+    # Filter 3: Low-Liquidity Bottlenecks (Coiled Springs)
+    if 'Eigenvector_Centrality' in metrics_df.columns:
+        bottleneck_threshold = metrics_df['Eigenvector_Centrality'].quantile(0.90)
+        low_vol_threshold = adv.quantile(0.20)
+
+        coiled_springs = metrics_df[
+            (metrics_df['Eigenvector_Centrality'] > bottleneck_threshold) &
+            (metrics_df['ADV'] < low_vol_threshold)
+        ]
+
+        for idx in coiled_springs.index:
+            alerts.append({"Type": "COILED_SPRING", "Ticker": idx, "Signal": "High Centrality + Low Vol. Expected Violent Gap."})
+
+    return metrics_df, alerts
+
 
 def perform_ml_analysis(close_data, vol_data, metrics):
     """

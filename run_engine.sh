@@ -32,9 +32,11 @@ ${CYAN}MAIN MENU:${NC}"
     echo "  [6] Quick Test (Simulate Last 30 Days)"
     echo "  [7] Train & Calibrate (Matrix Roaming & Optimization)"
     echo "  [8] Run Concentrated Top-5 NIS Backtest"
-    echo "  [9] Quit"
+    echo "  [9] Run Fee/Tax Optimized Backtest"
+    echo "  [10] Launch Live ANSI TUI Dashboard"
+    echo "  [11] Quit"
 
-    read -p "Select an option [1-10]: " option
+    read -p "Select an option [1-11]: " option
 
     case $option in
         1)
@@ -103,6 +105,7 @@ ${GREEN}Executing Heavy Continuous Calibration...${NC}"
 ${GREEN}Running 50,000 NIS Top 5 Concentrated Backtest...${NC}"
             python3 concentrated_backtest.py
             ;;
+
         9)
             echo -e "
 ${GREEN}Running Fee & Tax Optimization Matrix...${NC}"
@@ -110,11 +113,16 @@ ${GREEN}Running Fee & Tax Optimization Matrix...${NC}"
             ;;
         10)
             echo -e "
+${GREEN}Booting Native TUI Dashboard...${NC}"
+            python3 tui_dashboard.py
+            ;;
+        11)
+            echo -e "
 ${CYAN}Shutting down Thermodynamic Engine...${NC}"
             break
             ;;
         *)
-            echo -e "${RED}Invalid option. Please select 1-10.${NC}"
+            echo -e "${RED}Invalid option. Please select 1-11.${NC}"
             ;;
     esac
 done

@@ -53,6 +53,15 @@ def evaluate_ticker(ticker):
         projected_gain_pct = min(0.40, max(0.05, vel * centrality * 0.10))
         tp = price * (1.0 + projected_gain_pct)
 
+        # Calculate deterministic time to target (Phase cycle duration)
+        # We estimate how many days it will take to travel the distance (tp - price)
+        # given the daily volatility velocity (sigma_hf).
+        target_distance = tp - price
+        daily_drift_estimate = max(sigma_hf * 0.15, price * 0.001) # Assume 15% of daily vol is directional drift
+        estimated_days = int(target_distance / daily_drift_estimate)
+        estimated_days = min(365, max(1, estimated_days)) # Cap between 1 and 365 days
+
+
         drawdown_pct = ((price - sl) / price) * 100.0
 
         # Calculate Confidence derived from fiedler lambda2 (scaling 0.0 to 1.0 into 0-100%)
@@ -82,7 +91,7 @@ def evaluate_ticker(ticker):
         content.append("─" * 58 + "\n", style="dim")
 
         content.append(f"  Take Profit:     ", style="bold")
-        content.append(f"${tp:.2f}  (Phase Target)\n", style="green")
+        content.append(f"${tp:.2f}  (Phase Target in ~{estimated_days} Days)\n", style="green")
 
         content.append(f"  Stop Loss:       ", style="bold")
         content.append(f"${sl:.2f}  (Topological Support)\n", style="red")

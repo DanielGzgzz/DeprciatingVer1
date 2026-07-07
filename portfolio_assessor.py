@@ -86,7 +86,9 @@ def evaluate_ticker(ticker):
         content.append(f"${price:.2f}\n", style="cyan")
 
         content.append(f"  Real Value:      ", style="bold")
-        content.append(f"${real_value:.2f}  (Tensor Matrix Flow)\n", style="magenta")
+        price_delta_pct = ((price - real_value) / real_value) * 100.0
+        pricing_status = f"{abs(price_delta_pct):.1f}% OVERPRICED" if price_delta_pct > 0 else f"{abs(price_delta_pct):.1f}% UNDERPRICED"
+        content.append(f"${real_value:.2f}  ({pricing_status})\n", style="magenta")
 
         content.append("─" * 58 + "\n", style="dim")
 
@@ -99,7 +101,14 @@ def evaluate_ticker(ticker):
         content.append("─" * 58 + "\n", style="dim")
 
         content.append(f"  Confidence vs SP500:  ", style="bold")
-        content.append(f"{confidence}%  (λ₂ = {lambda2:.2f})\n", style="yellow")
+
+        # Win probability string formulation
+        # Using the base confidence scaled slightly by velocity for precision
+        decimal_prob = min(0.99, max(0.01, (confidence / 100.0) + (vel * 0.01)))
+        prob_pct = decimal_prob * 100
+        attempts = int(decimal_prob * 10)
+
+        content.append(f"{prob_pct:.1f}%  ({attempts} of 10 attempts profit by ~{estimated_days} Days)\n", style="yellow")
 
         v_style = "bold green" if "BUY" in verdict else "bold red"
         content.append(f"  Verdict:              ", style="bold")

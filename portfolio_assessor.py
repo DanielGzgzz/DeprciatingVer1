@@ -40,8 +40,26 @@ def evaluate_ticker(ticker):
         vel = row['All_Time_Velocity']
         target = row['Target_Weight_Pct']
         centrality = row.get('Eigenvector_Centrality', 0.1)
+        safety = row.get('Topological_Safety', 1.0)
+
+        # Layer 1: Inertia Filter (Physical Mass)
+        mass = safety * centrality * 100.0
+
         global_r = metrics.loc[metrics.index[0], 'Global_Kuramoto_Sync'] if 'Global_Kuramoto_Sync' in metrics.columns else 0.0
+        kuramoto_accel = metrics.loc[metrics.index[0], 'Kuramoto_Phase_Accel'] if 'Kuramoto_Phase_Accel' in metrics.columns else 0.0
         lambda2 = metrics.loc[metrics.index[0], 'Fiedler_Value'] if 'Fiedler_Value' in metrics.columns else 0.5
+
+        # Layer 3: Contagion Monitor (Hawkes Intensity)
+        hawkes_intensity = 0.0
+        if ticker in vol_df.columns:
+            vol_20d = vol_df[ticker].rolling(window=20).mean()
+            vol_ratio = (vol_df[ticker] / vol_20d).fillna(0)
+            beta = 0.5
+            for d in range(1, min(15, len(vol_ratio))):
+                spike = vol_ratio.iloc[-d]
+                if spike > 1.0:
+                    hawkes_intensity += (spike - 1.0) * np.exp(-beta * d)
+
 
         # Calculate stops
         z_score = 2.0 + (min(1.0, centrality) * 2.0)
@@ -68,8 +86,14 @@ def evaluate_ticker(ticker):
         # Cap lambda2 to a reasonable max scale of ~2.0 for standard graph
         confidence = min(99, max(1, int((lambda2 / 1.5) * 100)))
 
-        # Verdict Logic
-        if drawdown_pct > 10.0:
+        # Verdict Logic (Tri-Layer Macro-Topological Verdict Engine)
+        if global_r > 0.85 or kuramoto_accel > 0.1:
+            verdict = "HALT (Systemic Phase Sync/Collapse Detected)"
+        elif hawkes_intensity > 1.0:
+            verdict = "LOCKDOWN (Hawkes Contagion Micro-Shock Detected)"
+        elif mass < 1.0:
+            verdict = "REJECT (Insufficient Inertial Mass / Systemic Drift)"
+        elif drawdown_pct > 10.0:
             verdict = "EXIT / REJECT (Risk Factor > 10%)"
         elif vel <= 0:
             verdict = "EXIT / REJECT (Structural Vaporization)"
@@ -115,11 +139,22 @@ def evaluate_ticker(ticker):
         content.append(f"{verdict}\n", style=v_style)
 
         content.append("─" * 58 + "\n", style="dim")
-        content.append(f" [SYSTEM] Global Phase Lock r(t) = {global_r:.2f}. ", style="dim")
-        if global_r > 0.8:
-            content.append("CRITICAL FLIGHT RISK DETECTED.", style="bold red")
-        else:
-            content.append("System stable. No crash footprint.", style="green")
+        content.append("  [TRI-LAYER VERDICT ENGINE STATUS]\n", style="bold cyan")
+
+        # Layer 1 status
+        l1_style = "green" if mass >= 1.0 else "red"
+        l1_status = "STABLE" if mass >= 1.0 else "VULNERABLE (LOW MASS)"
+        content.append(f"  Layer 1 (Inertia Filter):     Mass = {mass:.2f} [{l1_status}]\n", style=l1_style)
+
+        # Layer 2 status
+        l2_style = "red" if (global_r > 0.85 or kuramoto_accel > 0.1) else "green"
+        l2_status = "CRITICAL (FLIGHT RISK)" if (global_r > 0.85 or kuramoto_accel > 0.1) else "STABLE"
+        content.append(f"  Layer 2 (Phase Sync):         r = {global_r:.2f}, r_dot = {kuramoto_accel:.2f} [{l2_status}]\n", style=l2_style)
+
+        # Layer 3 status
+        l3_style = "red" if hawkes_intensity > 1.0 else "green"
+        l3_status = "SHOCK DETECTED" if hawkes_intensity > 1.0 else "CLEAR"
+        content.append(f"  Layer 3 (Contagion Monitor):  Hawkes Intensity = {hawkes_intensity:.2f} [{l3_status}]\n", style=l3_style)
 
         panel = Panel(
             content,

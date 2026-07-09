@@ -126,3 +126,8 @@ if __name__ == "__main__":
     close_df_22, vol_df_22 = fetch_period_data("2022-01-01", "2022-12-31")
     allocs_22 = run_monthly_rebalancing(close_df_22, vol_df_22, "2022-01-01")
     execute_backtest(close_df_22, allocs_22, "2022 Tech Bear Market (Kelly Fraction Scaling Test)")
+
+    # Test 4: The Last 10 Years (Full Cycle Test)
+    close_df_10y, vol_df_10y = fetch_period_data("2014-01-01", "2024-01-01")
+    allocs_10y = run_monthly_rebalancing(close_df_10y, vol_df_10y, "2014-01-01")
+    execute_backtest(close_df_10y, allocs_10y, "The Last 10 Years (Full Cycle Test)")

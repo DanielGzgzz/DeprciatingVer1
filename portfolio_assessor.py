@@ -6,6 +6,7 @@ from datetime import datetime
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
+from scipy.signal import hilbert
 from market_analyzer import SYMBOLS, fetch_data, calculate_indicators, perform_ml_analysis, perform_spectral_analysis
 
 def evaluate_ticker(ticker):
@@ -28,6 +29,13 @@ def evaluate_ticker(ticker):
 
     if ticker in metrics.index:
         row = metrics.loc[ticker]
+        current_price = row['Current_Price']
+
+        # Calculate Real Value V_tensor
+        try:
+            real_value = close_df[ticker].rolling(window=126).mean().iloc[-1]
+        except:
+            real_value = current_price
 
         # Pull global network data
         global_r = metrics.loc[metrics.index[0], 'Global_Kuramoto_Sync'] if 'Global_Kuramoto_Sync' in metrics.columns else 0.0
@@ -104,16 +112,95 @@ def evaluate_ticker(ticker):
         S_i = max(0.01, 1.0 + (vel / 10.0))
         s_status = "POSITIVE" if S_i > 1.0 else "NEGATIVE"
 
-        # Compute Dynamic Fundamental Mass
+        # Base Compute Dynamic Fundamental Mass
         m_i = (S_i * D_i * E_i * G_i) ** 0.25
 
-        # Decision Logic
+        # --- Dynamic Execution Logic Gates ---
+
+        # We need historical SL state for Markov Penalty. In this CLI runner, we will simulate it.
+        # Check if a local cache file exists for Markov state
+        markov_file = f".{ticker}_markov.txt"
+        strike_count = 0
+        if os.path.exists(markov_file):
+            with open(markov_file, "r") as mf:
+                try:
+                    strike_count = int(mf.read().strip())
+                except:
+                    strike_count = 0
+
+        # Apply Game-Theoretic Penalty
+        k = 0.5
+        m_i = m_i * np.exp(-k * strike_count)
+
+        # Calculate Sigma (Volatility)
+        sigma_i = close_df[ticker].pct_change().rolling(window=14).std().iloc[-1] * current_price
+        if pd.isna(sigma_i) or sigma_i == 0: sigma_i = current_price * 0.02
+
+        # Calculate Trailing SL
+        sl_file = f".{ticker}_sl.txt"
+        previous_SL = 0.0
+        if os.path.exists(sl_file):
+            with open(sl_file, "r") as sf:
+                try:
+                    previous_SL = float(sf.read().strip())
+                except:
+                    previous_SL = 0.0
+
+        calculated_SL = real_value - (sigma_i / m_i)
+        trailing_SL = max(previous_SL, calculated_SL)
+
+        # Write new SL state
+        with open(sl_file, "w") as sf:
+            sf.write(str(trailing_SL))
+
+        # Friction & Take Profit Check
+        F = 0.01
+        alpha_target = 0.02
+
+        # We need an entry price to determine TP min threshold. Mocking entry price to real value for demonstration
+        entry_price = real_value
+        TP_min_threshold = entry_price * (1 + F + alpha_target)
+
+        # Calculate Phase Acceleration for this specific node
+        node_returns = close_df[ticker].pct_change().dropna()
+        node_phase_accel = 0.0
+        if len(node_returns) > 30:
+            detrended = node_returns - node_returns.mean()
+            analytic_signal = hilbert(detrended.values)
+            instantaneous_phase = np.unwrap(np.angle(analytic_signal))
+            node_r_t = instantaneous_phase # simplified single node phase velocity proxy
+            node_phase_vel = np.diff(node_r_t)
+            if len(node_phase_vel) > 1:
+                node_phase_accel = np.diff(node_phase_vel)[-1]
+
+        # Directive Calculation
         if m_i < 0.4 and kuramoto_accel > 0.05:
-            directive = "[bold red]EVACUATE (NODE LACKS STRUCTURAL RESISTANCE)[/bold red]"
+            base_directive = "EVACUATE"
             inertia_status = "LOW INERTIA"
         else:
-            directive = "[bold green]ENGAGE (NODE RESISTING REGIME STRESS)[/bold green]"
+            base_directive = "ENGAGE"
             inertia_status = "HIGH INERTIA" if m_i > 1.0 else "MODERATE INERTIA"
+
+        # Gate 1: Trailing SL Check
+        if current_price < trailing_SL:
+            final_verdict = "[bold red]HARD STOP: CAPITAL PRESERVED. PENALTY APPLIED.[/bold red]"
+            with open(markov_file, "w") as mf:
+                mf.write(str(strike_count + 1))
+
+        # Gate 2: Friction & Take Profit Check
+        elif current_price > TP_min_threshold:
+            if node_phase_accel < 0:
+                final_verdict = "[bold green]TAKE PROFIT: MOMENTUM DECAY CAPTURED.[/bold green]"
+                if os.path.exists(markov_file): os.remove(markov_file)
+            else:
+                final_verdict = "[bold yellow]MAINTAIN: MOMENTUM RISING. SL TRAILED UP.[/bold yellow]"
+
+        # Gate 3: Entry Check
+        elif base_directive == "ENGAGE" and strike_count == 0:
+            final_verdict = "[bold cyan]ENGAGE: NEW NODE ALLOCATED.[/bold cyan]"
+
+        else:
+            final_verdict = "[bold magenta]MAINTAIN: WAITING FOR THRESHOLD.[/bold magenta]"
 
         # Draw Output Console
         console = Console()
@@ -136,7 +223,7 @@ def evaluate_ticker(ticker):
             f"  └─ Network Coherence Vel : {'ACCELERATING' if kuramoto_accel > 0.1 else 'STABLE'}    (r_dot = {kuramoto_accel:+.2f})",
             "",
             f" ───────────────────────────────────────────────────────────────────────────",
-            f"  SYSTEM DIRECTIVE:  {directive}",
+            f"  SYSTEM DIRECTIVE:  {final_verdict}",
             f" ───────────────────────────────────────────────────────────────────────────"
         ]
 
@@ -147,6 +234,71 @@ def evaluate_ticker(ticker):
         print("\n")
     else:
         print(f"Data for {ticker} could not be resolved.")
+
+def evaluate_portfolio():
+    print("\n--- Enter Portfolio Holdings ---")
+    print("Enter 'END' when finished.")
+    holdings = {}
+    total_value = 0.0
+
+    while True:
+        ticker = input("Ticker Symbol (e.g. AAPL): ").strip().upper()
+        if ticker == 'END':
+            break
+
+        try:
+            value = float(input(f"Estimated $ Value of {ticker}: "))
+            holdings[ticker] = value
+            total_value += value
+        except ValueError:
+            print("Invalid value. Please enter numbers only.")
+
+    if total_value == 0:
+        print("Empty portfolio.")
+        return
+
+    print("\nProcessing Localized Tensor Network to assess portfolio...")
+    core_benchmarks = ["SPY", "QQQ", "TLT", "GLD", "XOM", "JNJ", "MSFT", "AAPL"]
+    custom_symbols = list(set(core_benchmarks + list(holdings.keys())))
+
+    import sys, os
+    old_stdout = sys.stdout
+    with open(os.devnull, 'w') as devnull:
+        sys.stdout = devnull
+        try:
+            close_df, vol_df = fetch_data(custom_symbols)
+            metrics = calculate_indicators(close_df, vol_df)
+            metrics, vapor = perform_ml_analysis(close_df, vol_df, metrics)
+        finally:
+            sys.stdout = old_stdout
+
+    print(f"\n--- PORTFOLIO ASSESSMENT (Total Value: ${total_value:,.2f}) ---")
+
+    for ticker, val in holdings.items():
+        if ticker in metrics.index:
+            current_weight = (val / total_value) * 100.0
+            optimal_weight = metrics.loc[ticker, 'Target_Weight_Pct']
+            vel = metrics.loc[ticker, 'All_Time_Velocity']
+            current_price = metrics.loc[ticker, 'Current_Price']
+
+            print(f"\n[{ticker}] Current Weight: {current_weight:.1f}% | Optimal Weight: {optimal_weight:.1f}% | Velocity: {vel:.2f}")
+            if vel <= 0:
+                print(f"   => VERDICT: SELL ENTIRE POSITION. Asset is in structural decay.")
+            elif current_weight > (optimal_weight * 1.3):
+                print(f"   => VERDICT: TRIM. You are over-exposed beyond the mathematical risk band.")
+            elif current_weight < optimal_weight:
+                print(f"   => VERDICT: ACCUMULATE. Asset has capacity to safely absorb more capital.")
+            else:
+                print(f"   => VERDICT: HOLD. Position is optimally sized.")
+        else:
+            print(f"\n[{ticker}] => VERDICT: UNKNOWN. Insufficient data to map in tensor.")
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--single":
+            evaluate_ticker(sys.argv[2])
+        elif sys.argv[1] == "--portfolio":
+            evaluate_portfolio()
 
 def evaluate_portfolio():
     print("\n--- Enter Portfolio Holdings ---")

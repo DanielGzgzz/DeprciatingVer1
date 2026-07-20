@@ -34,9 +34,10 @@ ${CYAN}MAIN MENU:${NC}"
     echo "  [8] Run Concentrated Top-5 NIS Backtest"
     echo "  [9] Run Fee/Tax Optimized Backtest"
     echo "  [10] Launch Live ANSI TUI Dashboard"
-    echo "  [11] Quit"
+    echo "  [11] Find Optimal Human Retail Trading System"
+    echo "  [12] Quit"
 
-    read -p "Select an option [1-11]: " option
+    read -p "Select an option [1-12]: " option
 
     case $option in
         1)
@@ -117,12 +118,21 @@ ${GREEN}Booting Native TUI Dashboard...${NC}"
             python3 tui_dashboard.py
             ;;
         11)
+            read -p "Enter Ticker Symbol for Retail Optimization (e.g. SPY): " ticker
+            if [ -n "$ticker" ]; then
+                echo -e "\n${GREEN}Optimizing Retail Strategies for: $ticker...${NC}"
+                python3 retail_optimizer.py "$ticker"
+            else
+                echo -e "${RED}Invalid input.${NC}"
+            fi
+            ;;
+        12)
             echo -e "
 ${CYAN}Shutting down Thermodynamic Engine...${NC}"
             break
             ;;
         *)
-            echo -e "${RED}Invalid option. Please select 1-11.${NC}"
+            echo -e "${RED}Invalid option. Please select 1-12.${NC}"
             ;;
     esac
 done

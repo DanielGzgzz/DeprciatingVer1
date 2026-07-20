@@ -82,6 +82,9 @@ def execute_concentrated_backtest(close_df, allocations_over_time):
     # Holdings tracked in shares
     holdings = {ticker: 0.0 for ticker in TEST_SYMBOLS if ticker != "ILS=X"}
 
+    # Track peak prices for trailing stop loss
+    peak_prices = {ticker: 0.0 for ticker in TEST_SYMBOLS if ticker != "ILS=X"}
+
     portfolio_value_history_nis = []
     rebalance_dict = {day_idx: allocs for day_idx, allocs in allocations_over_time}
 
@@ -96,6 +99,24 @@ def execute_concentrated_backtest(close_df, allocations_over_time):
         # Get exact daily conversion rate (1 USD = X ILS)
         usd_to_ils = current_prices.get("ILS=X", 3.7) # Fallback to 3.7 if missing
 
+        # Trailing stop loss logic
+        for ticker, shares in list(holdings.items()):
+            if shares > 0 and ticker in current_prices and not np.isnan(current_prices[ticker]):
+                current_price = current_prices[ticker]
+
+                # Update peak price
+                if current_price > peak_prices[ticker]:
+                    peak_prices[ticker] = current_price
+
+                # Check for 10% drop from peak
+                elif current_price < 0.9 * peak_prices[ticker]:
+                    # Liquidate position
+                    value_usd = shares * current_price
+                    value_nis = value_usd * usd_to_ils
+                    current_cash_nis += value_nis
+                    holdings[ticker] = 0.0
+                    peak_prices[ticker] = 0.0
+
         # Calculate current holdings value in NIS
         holdings_value_usd = sum(holdings.get(ticker, 0) * current_prices.get(ticker, 0) for ticker in holdings.keys() if ticker in current_prices)
         holdings_value_nis = holdings_value_usd * usd_to_ils
@@ -108,6 +129,7 @@ def execute_concentrated_backtest(close_df, allocations_over_time):
             # Liquidate to NIS
             current_cash_nis = total_portfolio_value_nis
             holdings = {ticker: 0.0 for ticker in holdings.keys()}
+            peak_prices = {ticker: 0.0 for ticker in peak_prices.keys()}
 
             # Reinvest
             for ticker, weight in target_weights.items():
@@ -117,6 +139,7 @@ def execute_concentrated_backtest(close_df, allocations_over_time):
                     shares_to_buy = allocated_cash_usd / current_prices[ticker]
 
                     holdings[ticker] = shares_to_buy
+                    peak_prices[ticker] = current_prices[ticker]
                     current_cash_nis -= allocated_cash_nis
 
             months_elapsed += 1
@@ -159,8 +182,9 @@ def execute_concentrated_backtest(close_df, allocations_over_time):
     print("="*80)
 
 if __name__ == "__main__":
-    print("Fetching last 2 years of data...")
-    # 1 Year backtest window
-    close_df, vol_df = fetch_data_with_fx("2023-01-01", "2024-01-01")
-    allocs = run_concentrated_allocations(close_df, vol_df, "2023-01-01")
+    end_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+    start_date = "2018-01-01"
+    print(f"Fetching data from {start_date} to {end_date}...")
+    close_df, vol_df = fetch_data_with_fx(start_date, end_date)
+    allocs = run_concentrated_allocations(close_df, vol_df, start_date)
     execute_concentrated_backtest(close_df, allocs)

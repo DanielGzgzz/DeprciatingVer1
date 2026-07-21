@@ -35,9 +35,10 @@ ${CYAN}MAIN MENU:${NC}"
     echo "  [9] Run Fee/Tax Optimized Backtest"
     echo "  [10] Launch Live ANSI TUI Dashboard"
     echo "  [11] Find Optimal Human Retail Trading System"
-    echo "  [12] Quit"
+    echo "  [12] Run Friction-Optimized Network Strategy"
+    echo "  [13] Quit"
 
-    read -p "Select an option [1-12]: " option
+    read -p "Select an option [1-13]: " option
 
     case $option in
         1)
@@ -127,12 +128,16 @@ ${GREEN}Booting Native TUI Dashboard...${NC}"
             fi
             ;;
         12)
+            echo -e "\n${GREEN}Executing Friction-Optimized Lazy Rebalance Strategy...${NC}"
+            python3 friction_optimized_backtest.py
+            ;;
+        13)
             echo -e "
 ${CYAN}Shutting down Thermodynamic Engine...${NC}"
             break
             ;;
         *)
-            echo -e "${RED}Invalid option. Please select 1-12.${NC}"
+            echo -e "${RED}Invalid option. Please select 1-13.${NC}"
             ;;
     esac
 done

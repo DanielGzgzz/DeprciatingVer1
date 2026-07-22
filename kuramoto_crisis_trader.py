@@ -5,7 +5,7 @@ import sys, os
 from datetime import datetime, timedelta
 from market_analyzer import calculate_indicators, perform_ml_analysis
 
-TEST_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "JPM", "XOM", "JNJ", "CVX", "BAC", "SPY", "QQQ", "TLT", "GLD", "ILS=X"]
+TEST_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "JPM", "XOM", "JNJ", "CVX", "BAC", "SPY", "VOO", "QQQ", "TLT", "GLD", "ILS=X"]
 INITIAL_BALANCE_NIS = 50000.0
 FEE_PER_TRANSACTION_NIS = 60.0
 MAX_POSITIONS = 5
@@ -131,6 +131,18 @@ def execute_kuramoto_backtest(close_df, allocations_dict, label):
     total_net_profit_nis = final_value_nis - INITIAL_BALANCE_NIS
     total_return_pct = (total_net_profit_nis / INITIAL_BALANCE_NIS) * 100.0
 
+    # Calculate Benchmark Returns (in NIS)
+    fx_start = close_df.iloc[start_idx].get("ILS=X", 3.7)
+    fx_end = close_df.iloc[-1].get("ILS=X", 3.7)
+
+    spy_start = close_df.iloc[start_idx].get("SPY", 1.0) * fx_start
+    spy_end = close_df.iloc[-1].get("SPY", 1.0) * fx_end
+    spy_return_pct = ((spy_end / spy_start) - 1.0) * 100.0 if spy_start > 0 else 0.0
+
+    voo_start = close_df.iloc[start_idx].get("VOO", 1.0) * fx_start
+    voo_end = close_df.iloc[-1].get("VOO", 1.0) * fx_end
+    voo_return_pct = ((voo_end / voo_start) - 1.0) * 100.0 if voo_start > 0 else 0.0
+
     print("\n" + "="*80)
     print(f"RESULTS FOR: {label} (Pure Kuramoto Crisis Trader)")
     print("="*80)
@@ -141,6 +153,21 @@ def execute_kuramoto_backtest(close_df, allocations_dict, label):
     print(f"Max Drawdown:               {max_drawdown_pct*100:.2f}%")
     print("-" * 80)
     print(f"Algorithm Net Return:       {total_return_pct:+.2f}%")
+    print(f"Benchmark SPY Net Return:   {spy_return_pct:+.2f}%")
+    print(f"Benchmark VOO Net Return:   {voo_return_pct:+.2f}%")
+
+    diff_spy = total_return_pct - spy_return_pct
+    diff_voo = total_return_pct - voo_return_pct
+
+    if diff_spy > 0:
+        print(f"\n=> Outperformed SPY by:       +{diff_spy:.2f}%")
+    else:
+        print(f"\n=> Trailed SPY by:            {diff_spy:.2f}%")
+
+    if diff_voo > 0:
+        print(f"=> Outperformed VOO by:       +{diff_voo:.2f}%")
+    else:
+        print(f"=> Trailed VOO by:            {diff_voo:.2f}%")
     print("="*80)
 
     return final_value_nis, total_net_profit_nis, total_fees_paid_nis, max_drawdown_pct

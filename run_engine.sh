@@ -37,9 +37,10 @@ ${CYAN}MAIN MENU:${NC}"
     echo "  [11] Find Optimal Human Retail Trading System"
     echo "  [12] Run Friction-Optimized Network Strategy"
     echo "  [13] Run Pure Kuramoto Crisis Evacuation Strategy"
-    echo "  [14] Quit"
+    echo "  [14] Run Ultimate Retail System (900+ Tickers, Rich UI)"
+    echo "  [15] Quit"
 
-    read -p "Select an option [1-14]: " option
+    read -p "Select an option [1-15]: " option
 
     case $option in
         1)
@@ -137,12 +138,15 @@ ${GREEN}Booting Native TUI Dashboard...${NC}"
             python3 kuramoto_crisis_trader.py
             ;;
         14)
+            python3 ultimate_retail_system.py
+            ;;
+        15)
             echo -e "
 ${CYAN}Shutting down Thermodynamic Engine...${NC}"
             break
             ;;
         *)
-            echo -e "${RED}Invalid option. Please select 1-14.${NC}"
+            echo -e "${RED}Invalid option. Please select 1-15.${NC}"
             ;;
     esac
 done

@@ -5,10 +5,9 @@ import sys, os
 from datetime import datetime, timedelta
 from market_analyzer import calculate_indicators, perform_ml_analysis
 
-# A diverse set of symbols including forex for conversion
 TEST_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "JPM", "XOM", "JNJ", "CVX", "BAC", "SPY", "QQQ", "TLT", "GLD", "ILS=X"]
 INITIAL_BALANCE_NIS = 50000.0
-SAFE_HAVENS = ["TLT", "GLD"]
+FEE_PER_TRANSACTION_NIS = 60.0
 MAX_POSITIONS = 5
 
 def fetch_data_with_fx(start_date, end_date):
@@ -18,7 +17,7 @@ def fetch_data_with_fx(start_date, end_date):
     vol_df = data["Volume"].fillna(0).dropna(axis=1, how='all')
     return close_df, vol_df
 
-def run_concentrated_allocations(close_df, vol_df, test_start_date):
+def run_network_allocations(close_df, vol_df, test_start_date):
     try:
         start_idx = close_df.index.get_indexer([pd.to_datetime(test_start_date)], method='nearest')[0]
     except KeyError:
@@ -41,48 +40,32 @@ def run_concentrated_allocations(close_df, vol_df, test_start_date):
             sys.stdout.close()
             sys.stdout = old_stdout
 
-        # We only want tradeable assets, not the forex tracker itself
         tradeable_metrics = metrics.drop("ILS=X", errors='ignore')
-
-        # Check Kuramoto Crash Flag
-        global_sync = metrics['Global_Kuramoto_Sync'].iloc[0] if 'Global_Kuramoto_Sync' in metrics.columns else 0.0
-        is_crashing = global_sync > 0.85
 
         targets = {ticker: 0.0 for ticker in TEST_SYMBOLS if ticker != "ILS=X"}
 
-        if is_crashing:
-            # Dynamic Topological Haven: Select assets furthest from the synchronizing liquidating cluster
-            if 'Topological_Distance' in tradeable_metrics.columns:
-                dynamic_havens = tradeable_metrics.sort_values(by='Topological_Distance', ascending=False).head(2)
-                weight_per_haven = 1.0 / len(dynamic_havens) if len(dynamic_havens) > 0 else 0
-                for ticker in dynamic_havens.index:
-                    targets[ticker] = weight_per_haven
+        # STRATEGY: Allocate strictly by Eigenvector Centrality
+        if 'Eigenvector_Centrality' in tradeable_metrics.columns:
+            top_central = tradeable_metrics.sort_values(by='Eigenvector_Centrality', ascending=False).head(MAX_POSITIONS)
+            total_centrality = top_central['Eigenvector_Centrality'].sum()
+
+            if total_centrality > 0:
+                for ticker in top_central.index:
+                    targets[ticker] = top_central.loc[ticker, 'Eigenvector_Centrality'] / total_centrality
             else:
-                for safe_asset in SAFE_HAVENS:
-                    if safe_asset in targets:
-                        targets[safe_asset] = 0.5
+                for safe_asset in ["TLT", "GLD"]:
+                    if safe_asset in targets: targets[safe_asset] = 0.5
         else:
-            # Picky Top 5 methodology
-            # Rank strictly by target weight (which encompasses velocity, safety, and centrality)
-            top_5 = tradeable_metrics[tradeable_metrics['Target_Weight_Pct'] > 0].sort_values(by='Target_Weight_Pct', ascending=False).head(MAX_POSITIONS)
-
-            # Equal weight the top 5 (20% each, approx 10,000 NIS each)
-            weight_per_asset = 1.0 / len(top_5) if len(top_5) > 0 else 0
-
-            for ticker in top_5.index:
-                targets[ticker] = weight_per_asset
+            for safe_asset in ["TLT", "GLD"]:
+                if safe_asset in targets: targets[safe_asset] = 0.5
 
         allocations_over_time.append((current_day_idx, targets))
 
     return allocations_over_time
 
-def execute_concentrated_backtest(close_df, allocations_over_time):
-    # Account tracked in NIS
+def execute_network_backtest(close_df, allocations_over_time, label):
     current_cash_nis = INITIAL_BALANCE_NIS
-    # Holdings tracked in shares
     holdings = {ticker: 0.0 for ticker in TEST_SYMBOLS if ticker != "ILS=X"}
-
-    # Track peak prices for trailing stop loss
     peak_prices = {ticker: 0.0 for ticker in TEST_SYMBOLS if ticker != "ILS=X"}
 
     portfolio_value_history_nis = []
@@ -91,29 +74,32 @@ def execute_concentrated_backtest(close_df, allocations_over_time):
     start_idx = allocations_over_time[0][0]
     total_days = close_df.shape[0]
 
-    months_elapsed = 0
+    total_fees_paid_nis = 0.0
+    high_water_mark = INITIAL_BALANCE_NIS
+    max_drawdown_pct = 0.0
 
     for current_day_idx in range(start_idx, total_days):
         current_prices = close_df.iloc[current_day_idx]
+        usd_to_ils = current_prices.get("ILS=X", 3.7)
 
-        # Get exact daily conversion rate (1 USD = X ILS)
-        usd_to_ils = current_prices.get("ILS=X", 3.7) # Fallback to 3.7 if missing
-
-        # Trailing stop loss logic
+        # Trailing stop loss logic (10%)
         for ticker, shares in list(holdings.items()):
             if shares > 0 and ticker in current_prices and not np.isnan(current_prices[ticker]):
                 current_price = current_prices[ticker]
 
-                # Update peak price
                 if current_price > peak_prices[ticker]:
                     peak_prices[ticker] = current_price
 
-                # Check for 10% drop from peak
                 elif current_price < 0.9 * peak_prices[ticker]:
-                    # Liquidate position
+                    # Liquidate position (Sell Fee)
                     value_usd = shares * current_price
                     value_nis = value_usd * usd_to_ils
+
+                    # Deduct fee
                     current_cash_nis += value_nis
+                    current_cash_nis -= FEE_PER_TRANSACTION_NIS
+                    total_fees_paid_nis += FEE_PER_TRANSACTION_NIS
+
                     holdings[ticker] = 0.0
                     peak_prices[ticker] = 0.0
 
@@ -123,26 +109,43 @@ def execute_concentrated_backtest(close_df, allocations_over_time):
 
         total_portfolio_value_nis = current_cash_nis + holdings_value_nis
 
+        # Max Drawdown tracking
+        if total_portfolio_value_nis > high_water_mark:
+            high_water_mark = total_portfolio_value_nis
+        else:
+            drawdown = (high_water_mark - total_portfolio_value_nis) / high_water_mark
+            if drawdown > max_drawdown_pct:
+                max_drawdown_pct = drawdown
+
         if current_day_idx in rebalance_dict:
             target_weights = rebalance_dict[current_day_idx]
 
             # Liquidate to NIS
             current_cash_nis = total_portfolio_value_nis
+            for ticker, qty in holdings.items():
+                if qty > 0 and ticker in current_prices and not np.isnan(current_prices[ticker]):
+                    current_cash_nis -= FEE_PER_TRANSACTION_NIS # Sell Fee
+                    total_fees_paid_nis += FEE_PER_TRANSACTION_NIS
+
             holdings = {ticker: 0.0 for ticker in holdings.keys()}
             peak_prices = {ticker: 0.0 for ticker in peak_prices.keys()}
 
             # Reinvest
+            total_investable = current_cash_nis
             for ticker, weight in target_weights.items():
                 if weight > 0 and ticker in current_prices and not np.isnan(current_prices[ticker]):
-                    allocated_cash_nis = total_portfolio_value_nis * weight
-                    allocated_cash_usd = allocated_cash_nis / usd_to_ils
-                    shares_to_buy = allocated_cash_usd / current_prices[ticker]
+                    allocated_cash_nis = total_investable * weight
+                    # Buy Fee
+                    allocated_cash_nis -= FEE_PER_TRANSACTION_NIS
+                    total_fees_paid_nis += FEE_PER_TRANSACTION_NIS
 
-                    holdings[ticker] = shares_to_buy
-                    peak_prices[ticker] = current_prices[ticker]
-                    current_cash_nis -= allocated_cash_nis
+                    if allocated_cash_nis > 0:
+                        allocated_cash_usd = allocated_cash_nis / usd_to_ils
+                        shares_to_buy = allocated_cash_usd / current_prices[ticker]
 
-            months_elapsed += 1
+                        holdings[ticker] = shares_to_buy
+                        peak_prices[ticker] = current_prices[ticker]
+                        current_cash_nis -= (allocated_cash_nis + FEE_PER_TRANSACTION_NIS)
 
         portfolio_value_history_nis.append(total_portfolio_value_nis)
 
@@ -150,41 +153,44 @@ def execute_concentrated_backtest(close_df, allocations_over_time):
     total_net_profit_nis = final_value_nis - INITIAL_BALANCE_NIS
     total_return_pct = (total_net_profit_nis / INITIAL_BALANCE_NIS) * 100.0
 
-    avg_monthly_profit_nis = total_net_profit_nis / months_elapsed if months_elapsed > 0 else 0
-    avg_monthly_profit_pct = total_return_pct / months_elapsed if months_elapsed > 0 else 0
-
-    # Benchmark SPY in NIS
-    spy_start_usd = close_df.iloc[start_idx]['SPY']
-    spy_end_usd = close_df.iloc[-1]['SPY']
-    fx_start = close_df.iloc[start_idx].get("ILS=X", 3.7)
-    fx_end = close_df.iloc[-1].get("ILS=X", 3.7)
-
-    spy_start_nis = spy_start_usd * fx_start
-    spy_end_nis = spy_end_usd * fx_end
-    benchmark_return_pct = ((spy_end_nis / spy_start_nis) - 1.0) * 100.0
-
     print("\n" + "="*80)
-    print("CONCENTRATED 'TOP 5' FOREX-ADJUSTED BACKTEST RESULTS")
+    print(f"RESULTS FOR: {label}")
     print("="*80)
     print(f"Starting Balance:           {INITIAL_BALANCE_NIS:,.2f} NIS")
     print(f"Final Balance:              {final_value_nis:,.2f} NIS")
     print(f"Total Net Profit:           {total_net_profit_nis:,.2f} NIS")
-    print(f"Average Monthly Profit:     {avg_monthly_profit_nis:,.2f} NIS/mo ({avg_monthly_profit_pct:+.2f}%/mo)")
+    print(f"Total Fees Paid:            {total_fees_paid_nis:,.2f} NIS")
+    print(f"Max Drawdown:               {max_drawdown_pct*100:.2f}%")
     print("-" * 80)
-    print(f"Algorithm Total Return:     {total_return_pct:+.2f}%")
-    print(f"Benchmark SPY (in NIS):     {benchmark_return_pct:+.2f}%")
-
-    diff = total_return_pct - benchmark_return_pct
-    if diff > 0:
-        print(f"\n=> SUCCESS: Outperformed the SPY benchmark by {diff:.2f}%")
-    else:
-        print(f"\n=> UNDERPERFORMANCE: Trailed the SPY benchmark by {-diff:.2f}%")
+    print(f"Algorithm Net Return:       {total_return_pct:+.2f}%")
     print("="*80)
 
+    return final_value_nis, total_net_profit_nis, total_fees_paid_nis, max_drawdown_pct
+
+def run_scenarios():
+    now = datetime.now() - timedelta(days=30)
+    end_date_str = now.strftime('%Y-%m-%d')
+
+    # Last 1 Month
+    start_1m = (now - timedelta(days=30)).strftime('%Y-%m-%d')
+    print(f"Fetching data for Last 1 Month ({start_1m} to {end_date_str})...")
+    c1, v1 = fetch_data_with_fx(start_1m, end_date_str)
+    a1 = run_network_allocations(c1, v1, start_1m)
+    execute_network_backtest(c1, a1, "Last 1 Month")
+
+    # Last 1 Year
+    start_1y = (now - timedelta(days=365)).strftime('%Y-%m-%d')
+    print(f"\nFetching data for Last 1 Year ({start_1y} to {end_date_str})...")
+    c2, v2 = fetch_data_with_fx(start_1y, end_date_str)
+    a2 = run_network_allocations(c2, v2, start_1y)
+    execute_network_backtest(c2, a2, "Last 1 Year")
+
+    # Last 10 Years
+    start_10y = (now - timedelta(days=365*10)).strftime('%Y-%m-%d')
+    print(f"\nFetching data for Last 10 Years ({start_10y} to {end_date_str})...")
+    c3, v3 = fetch_data_with_fx(start_10y, end_date_str)
+    a3 = run_network_allocations(c3, v3, start_10y)
+    execute_network_backtest(c3, a3, "Last 10 Years")
+
 if __name__ == "__main__":
-    end_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-    start_date = "2018-01-01"
-    print(f"Fetching data from {start_date} to {end_date}...")
-    close_df, vol_df = fetch_data_with_fx(start_date, end_date)
-    allocs = run_concentrated_allocations(close_df, vol_df, start_date)
-    execute_concentrated_backtest(close_df, allocs)
+    run_scenarios()

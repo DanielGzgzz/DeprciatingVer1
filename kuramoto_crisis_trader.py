@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from market_analyzer import calculate_indicators, perform_ml_analysis
 
 TEST_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "JPM", "XOM", "JNJ", "CVX", "BAC", "SPY", "VOO", "QQQ", "TLT", "GLD", "ILS=X"]
-INITIAL_BALANCE_NIS = 50000.0
+INITIAL_BALANCE_NIS = 100000.0
 FEE_PER_TRANSACTION_NIS = 60.0
 MAX_POSITIONS = 5
 KURAMOTO_THRESHOLD = 0.85
@@ -75,6 +75,7 @@ def run_kuramoto_allocations(close_df, vol_df, test_start_date):
 def execute_kuramoto_backtest(close_df, allocations_dict, label):
     current_cash_nis = INITIAL_BALANCE_NIS
     holdings = {ticker: 0.0 for ticker in TEST_SYMBOLS if ticker != "ILS=X"}
+    transaction_log = []
 
     portfolio_value_history_nis = []
 
@@ -100,9 +101,12 @@ def execute_kuramoto_backtest(close_df, allocations_dict, label):
                 # Full liquidation
                 for ticker, shares in list(holdings.items()):
                     if shares > 0:
-                        value_usd = shares * current_prices.get(ticker, 0)
-                        current_cash_nis += (value_usd * usd_to_ils) - FEE_PER_TRANSACTION_NIS
+                        price_usd = current_prices.get(ticker, 0)
+                        value_usd = shares * price_usd
+                        value_nis = value_usd * usd_to_ils
+                        current_cash_nis += value_nis - FEE_PER_TRANSACTION_NIS
                         total_fees_paid_nis += FEE_PER_TRANSACTION_NIS
+                        transaction_log.append(f"SELL | {close_df.index[current_day_idx].strftime('%Y-%m-%d')} | {ticker:5s} | Shares: {shares:8.2f} | Price: ${price_usd:7.2f} | Value: {value_nis:9.2f} NIS | State: {'CRASH' if is_crashing else 'NORMAL'}")
                         holdings[ticker] = 0.0
 
                 # Full reinvestment
@@ -111,9 +115,12 @@ def execute_kuramoto_backtest(close_df, allocations_dict, label):
                     if weight > 0 and ticker in current_prices and not np.isnan(current_prices[ticker]):
                         allocated_nis = (total_portfolio_value_nis * weight) - FEE_PER_TRANSACTION_NIS
                         if allocated_nis > 0:
+                            price_usd = current_prices[ticker]
+                            shares_bought = (allocated_nis / usd_to_ils) / price_usd
                             current_cash_nis -= (allocated_nis + FEE_PER_TRANSACTION_NIS)
                             total_fees_paid_nis += FEE_PER_TRANSACTION_NIS
-                            holdings[ticker] = (allocated_nis / usd_to_ils) / current_prices[ticker]
+                            holdings[ticker] = shares_bought
+                            transaction_log.append(f"BUY  | {close_df.index[current_day_idx].strftime('%Y-%m-%d')} | {ticker:5s} | Shares: {shares_bought:8.2f} | Price: ${price_usd:7.2f} | Value: {allocated_nis:9.2f} NIS | State: {'CRASH' if is_crashing else 'NORMAL'}")
 
                 current_state_crashing = is_crashing
 
@@ -146,6 +153,14 @@ def execute_kuramoto_backtest(close_df, allocations_dict, label):
     voo_start = close_df.iloc[start_idx].get("VOO", 1.0) * fx_start
     voo_end = close_df.iloc[-1].get("VOO", 1.0) * fx_end
     voo_return_pct = ((voo_end / voo_start) - 1.0) * 100.0 if voo_start > 0 else 0.0
+
+    print("\n" + "="*80)
+    print(f"TRANSACTION LOG: {label}")
+    print("-" * 80)
+    for log in transaction_log:
+        print(log)
+    if not transaction_log:
+        print("No transactions executed during this period.")
 
     print("\n" + "="*80)
     print(f"RESULTS FOR: {label} (Pure Kuramoto Crisis Trader)")

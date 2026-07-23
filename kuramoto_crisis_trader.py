@@ -10,6 +10,7 @@ INITIAL_BALANCE_NIS = 50000.0
 FEE_PER_TRANSACTION_NIS = 60.0
 MAX_POSITIONS = 5
 KURAMOTO_THRESHOLD = 0.85
+FIEDLER_THRESHOLD = 0.80
 
 def fetch_data_with_fx(start_date, end_date):
     fetch_start = pd.to_datetime(start_date) - pd.DateOffset(years=1)
@@ -46,7 +47,10 @@ def run_kuramoto_allocations(close_df, vol_df, test_start_date):
         tradeable_metrics = metrics.drop("ILS=X", errors='ignore')
 
         global_sync = metrics['Global_Kuramoto_Sync'].iloc[0] if 'Global_Kuramoto_Sync' in metrics.columns else 0.0
-        is_crashing = global_sync > KURAMOTO_THRESHOLD
+        fiedler_val = metrics['Fiedler_Value'].iloc[0] if 'Fiedler_Value' in metrics.columns else 0.0
+
+        # Crisis is only verified if BOTH Kuramoto Sync (Panic) AND Fiedler (Contagion Network) are high.
+        is_crashing = (global_sync > KURAMOTO_THRESHOLD) and (fiedler_val > FIEDLER_THRESHOLD)
 
         targets = {ticker: 0.0 for ticker in TEST_SYMBOLS if ticker != "ILS=X"}
 

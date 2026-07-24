@@ -8,3 +8,5 @@ requests
 beautifulsoup4
 networkx
 rich
+
+lxml>=4.9.0

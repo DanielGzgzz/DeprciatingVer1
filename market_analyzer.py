@@ -1138,6 +1138,68 @@ def generate_alpha_triggers(metrics_df, tau_matrix, k_matrix, vol_df):
     return metrics_df, alerts
 
 
+import yfinance as yf
+
+def compute_fundamental_mass(ticker, vel):
+    try:
+        yf_ticker = yf.Ticker(ticker)
+        info = yf_ticker.info
+
+        # A. Dividend Yield
+        div_yield = info.get('dividendYield', 0)
+        if div_yield is None: div_yield = 0
+        payout_ratio = info.get('payoutRatio', 0)
+        if payout_ratio is None: payout_ratio = 0
+
+        if payout_ratio > 1.0:
+            D_i = 0.01
+        else:
+            D_i = max(0.01, 1.0 + (div_yield * 10 * (1 - payout_ratio)))
+
+        # B. Earnings
+        E_i = 1.0
+        try:
+            edates = yf_ticker.earnings_dates
+            if edates is not None and len(edates) > 0:
+                past_edates = edates.dropna(subset=['Reported EPS']).head(4)
+                if len(past_edates) == 4:
+                    e_sum = 0
+                    weights = [0.4, 0.3, 0.2, 0.1]
+                    for i in range(4):
+                        est = past_edates.iloc[i]['EPS Estimate']
+                        act = past_edates.iloc[i]['Reported EPS']
+                        if pd.isna(est) or est == 0: est = 1e-5
+                        diff = act - est
+                        e_sum += weights[i] * np.sign(diff) * abs(diff / est)
+                    E_i = max(0.01, 1.0 + e_sum)
+        except:
+            pass
+
+        # C. Growth
+        G_i = 1.0
+        try:
+            rev = yf_ticker.quarterly_financials.loc['Total Revenue'] if 'Total Revenue' in yf_ticker.quarterly_financials.index else None
+            fcf = yf_ticker.quarterly_cashflow.loc['Free Cash Flow'] if 'Free Cash Flow' in yf_ticker.quarterly_cashflow.index else None
+            if rev is not None and len(rev.dropna()) >= 2 and fcf is not None and len(fcf.dropna()) >= 2:
+                rev = rev.dropna()
+                fcf = fcf.dropna()
+                delta_rev = rev.iloc[0] - rev.iloc[1]
+                delta_fcf = fcf.iloc[0] - fcf.iloc[1]
+                sig_rev = rev.std()
+                if sig_rev == 0: sig_rev = 1e-5
+                sig_fcf = fcf.std()
+                if sig_fcf == 0: sig_fcf = 1e-5
+                G_i = np.tanh((delta_rev / sig_rev) + (delta_fcf / sig_fcf)) + 1.0
+        except:
+            pass
+
+        # D. Sentiment
+        S_i = max(0.01, 1.0 + (vel / 10.0))
+
+        return (S_i * D_i * E_i * G_i) ** 0.25
+    except:
+        return 1.0
+
 def perform_ml_analysis(close_data, vol_data, metrics):
     """
     Construct the 3rd-Order Flow Tensor F_t and apply the Volume Friction Counter.
@@ -1170,7 +1232,9 @@ def perform_ml_analysis(close_data, vol_data, metrics):
 
     recent_returns = returns.iloc[-10:] # last 10 days
     recent_corr = recent_returns.corr().fillna(0)
-    recent_flow = recent_corr.values * volume_friction_matrix
+
+    min_dim = min(recent_corr.shape[0], volume_friction_matrix.shape[0])
+    recent_flow = recent_corr.values[:min_dim, :min_dim] * volume_friction_matrix[:min_dim, :min_dim]
     np.fill_diagonal(recent_flow, 0)
     recent_flow_df = pd.DataFrame(recent_flow, index=corr_matrix.index, columns=corr_matrix.columns)
 

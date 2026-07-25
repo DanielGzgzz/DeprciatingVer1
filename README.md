@@ -68,7 +68,7 @@ python market_analyzer.py
 2.  **PDF Report (`bode_plots.pdf`):** Visual Bode Magnitude Plots of the top conviction nodes separating structural accumulation from cyclical noise.
 
 ### 2. Historical Rigorous Backtesting
-To validate the model's thermodynamic crash-detection and structural growth capabilities against historical regimes, run the backtest suite:
+To validate the model's thermodynamic crash-detection and structural growth capabilities against historical regimes, run the backtest suite. The suite output includes granular month-over-month performance metrics, historical Best/Worst month tracking, and calendar seasonality averages:
 
 ```bash
 python rigorous_backtest.py

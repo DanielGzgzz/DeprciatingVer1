@@ -62,6 +62,7 @@ def execute_backtest(close_df, allocations_over_time, label):
     current_cash = INITIAL_BALANCE_NIS
     holdings = {ticker: 0.0 for ticker in TEST_SYMBOLS}
     portfolio_value_history = []
+    portfolio_dates = []
 
     rebalance_dict = {day_idx: (allocs, crash, sync) for day_idx, allocs, crash, sync in allocations_over_time}
 
@@ -70,6 +71,7 @@ def execute_backtest(close_df, allocations_over_time, label):
 
     for current_day_idx in range(start_idx, total_days):
         current_prices = close_df.iloc[current_day_idx]
+        current_date = close_df.index[current_day_idx]
 
         holdings_value = sum(holdings.get(ticker, 0) * current_prices.get(ticker, 0) for ticker in TEST_SYMBOLS if ticker in current_prices)
         total_portfolio_value = current_cash + holdings_value
@@ -90,9 +92,46 @@ def execute_backtest(close_df, allocations_over_time, label):
                     current_cash -= allocated_cash
 
         portfolio_value_history.append(total_portfolio_value)
+        portfolio_dates.append(current_date)
 
     final_value = portfolio_value_history[-1]
     total_return = ((final_value / INITIAL_BALANCE_NIS) - 1.0) * 100.0
+
+    # Calculate actual monthly metrics
+    port_series = pd.Series(portfolio_value_history, index=portfolio_dates)
+    monthly_vals = port_series.resample('ME').last()
+    first_date_val = port_series.iloc[0]
+
+    monthly_returns = monthly_vals.pct_change() * 100.0
+    if len(monthly_vals) > 0 and not pd.isna(monthly_vals.iloc[0]):
+        monthly_returns.iloc[0] = ((monthly_vals.iloc[0] / first_date_val) - 1.0) * 100.0
+
+    monthly_returns = monthly_returns.dropna()
+
+    best_month_val = 0
+    best_month_date = "N/A"
+    worst_month_val = 0
+    worst_month_date = "N/A"
+
+    calendar_month_returns = {i: [] for i in range(1, 13)}
+
+    if len(monthly_returns) > 0:
+        best_month_val = monthly_returns.max()
+        best_month_date = monthly_returns.idxmax().strftime('%b %Y')
+        worst_month_val = monthly_returns.min()
+        worst_month_date = monthly_returns.idxmin().strftime('%b %Y')
+
+        for date, ret in monthly_returns.items():
+            calendar_month_returns[date.month].append(ret)
+
+    # Calculate average by calendar month
+    avg_cal_months = {}
+    import calendar
+    for m in range(1, 13):
+        if calendar_month_returns[m]:
+            avg_cal_months[calendar.month_abbr[m]] = sum(calendar_month_returns[m]) / len(calendar_month_returns[m])
+        else:
+            avg_cal_months[calendar.month_abbr[m]] = 0.0
 
     spy_start_price = close_df.iloc[start_idx]['SPY']
     spy_end_price = close_df.iloc[-1]['SPY']
@@ -101,6 +140,13 @@ def execute_backtest(close_df, allocations_over_time, label):
     print("\n" + "="*80)
     print(f"RIGOROUS BACKTEST RESULTS: {label}")
     print("="*80)
+    print("MONTHLY PERFORMANCE METRICS")
+    print(f"Best Month:                 {best_month_date} ({best_month_val:+.2f}%)")
+    print(f"Worst Month:                {worst_month_date} ({worst_month_val:+.2f}%)")
+    print("\nAVERAGE RETURN BY CALENDAR MONTH (SEASONALITY)")
+    print(" | ".join([f"{m}: {avg_cal_months[m]:+.2f}%" for m in calendar.month_abbr[1:7]]))
+    print(" | ".join([f"{m}: {avg_cal_months[m]:+.2f}%" for m in calendar.month_abbr[7:13]]))
+    print("-" * 80)
     print(f"Algorithm Return:   {total_return:+.2f}%")
     print(f"Benchmark (SPY):    {benchmark_return:+.2f}%")
 

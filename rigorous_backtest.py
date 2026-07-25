@@ -142,7 +142,10 @@ def execute_backtest(close_df, allocations_over_time, label):
     print("="*80)
     print("MONTHLY PERFORMANCE METRICS")
     print(f"Best Month:                 {best_month_date} ({best_month_val:+.2f}%)")
-    print(f"Worst Month:                {worst_month_date} ({worst_month_val:+.2f}%)")
+    print(f"Worst Month:                {worst_month_date} ({worst_month_val:+.2f}%)\n")
+    print("CHRONOLOGICAL MONTHLY RETURNS:")
+    for date, ret in monthly_returns.items():
+        print(f"  {date.strftime('%b %Y')}: {ret:+.2f}%")
     print("\nAVERAGE RETURN BY CALENDAR MONTH (SEASONALITY)")
     print(" | ".join([f"{m}: {avg_cal_months[m]:+.2f}%" for m in calendar.month_abbr[1:7]]))
     print(" | ".join([f"{m}: {avg_cal_months[m]:+.2f}%" for m in calendar.month_abbr[7:13]]))
